@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Users · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
+  <h1 class="h3 mb-0">Users</h1>
+  <span id="user-count" class="text-body-secondary small"></span>
+</div>
+<div id="error-banner" class="alert alert-danger d-none" role="alert"></div>
+
+{% if can('users:write') %}
+<div class="card mb-4">
+  <div class="card-header">Create user</div>
+  <div class="card-body">
+    <form id="create-user-form" class="row g-3">
+      <div class="col-12 col-md-3">
+        <label class="form-label" for="cu-username">Username</label>
+        <input class="form-control" id="cu-username" name="username" required
+               autocapitalize="none" spellcheck="false" autocomplete="off">
+      </div>
+      <div class="col-12 col-md-3">
+        <label class="form-label" for="cu-display">Display name</label>
+        <input class="form-control" id="cu-display" name="display_name" autocomplete="off">
+      </div>
+      <div class="col-12 col-md-3">
+        <label class="form-label" for="cu-email">Email</label>
+        <input class="form-control" id="cu-email" name="email" type="email" autocomplete="off">
+      </div>
+      <div class="col-12 col-md-3">
+        <label class="form-label" for="cu-password">Password</label>
+        <input class="form-control" id="cu-password" name="password" type="password"
+               autocomplete="new-password" required>
+      </div>
+      <div class="col-12">
+        <label class="form-label d-block">Roles</label>
+        <div id="cu-roles" class="d-flex flex-wrap gap-3"></div>
+      </div>
+      <div class="col-12">
+        <button type="submit" class="btn btn-primary">Create user</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-header">Accounts</div>
+  <div class="table-responsive">
+    <table class="table table-striped align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Username</th>
+          <th>Display name</th>
+          <th>Email</th>
+          <th>Roles</th>
+          <th>Status</th>
+          {% if can('users:write') %}<th class="text-end">Actions</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody id="users-body"></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script type="module" src="{{ url_for('static', path='js/users.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Groups · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
+  <h1 class="h3 mb-0">Groups</h1>
+  <span id="group-count" class="text-body-secondary small"></span>
+</div>
+<div id="error-banner" class="alert alert-danger d-none" role="alert"></div>
+
+{% if can('groups:write') %}
+<div class="card mb-4">
+  <div class="card-header">Create group</div>
+  <div class="card-body">
+    <form id="create-group-form" class="row g-3">
+      <div class="col-12 col-md-4">
+        <label class="form-label" for="cg-name">Name</label>
+        <input class="form-control" id="cg-name" name="name" required
+               autocapitalize="none" spellcheck="false" autocomplete="off">
+      </div>
+      <div class="col-12 col-md-6">
+        <label class="form-label" for="cg-description">Description</label>
+        <input class="form-control" id="cg-description" name="description" autocomplete="off">
+      </div>
+      <div class="col-12 col-md-2 d-flex align-items-end">
+        <button type="submit" class="btn btn-primary">Create group</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+<div id="groups-container" class="row g-3"></div>
+{% endblock %}
+{% block scripts %}
+<script type="module" src="{{ url_for('static', path='js/groups.js') }}"></script>
+{% endblock %}

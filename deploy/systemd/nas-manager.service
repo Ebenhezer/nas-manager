@@ -1,0 +1,60 @@
+[Unit]
+Description=NAS Manager web application
+Documentation=file:///opt/nas-manager/docs/INSTALLATION.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nas-manager
+Group=nas-manager
+WorkingDirectory=/opt/nas-manager
+EnvironmentFile=/etc/nas-manager/nas-manager.env
+Environment=NAS_DATA_DIR=/var/lib/nas-manager
+Environment=NAS_LOG_DIR=/var/log/nas-manager
+Environment=NAS_ENVIRONMENT=production
+
+# Apply pending schema migrations before the application starts.
+ExecStartPre=/opt/nas-manager/.venv/bin/alembic upgrade head
+ExecStart=/opt/nas-manager/.venv/bin/python -m app
+
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+# State and logs are owned by the unprivileged service user.
+StateDirectory=nas-manager
+StateDirectoryMode=0750
+LogsDirectory=nas-manager
+LogsDirectoryMode=0750
+UMask=0027
+
+# Sandboxing. The web process never runs as root and holds no capabilities.
+# Later phases that need to write shares or media directories must add them
+# explicitly with ReadWritePaths=; privileged operations go through a separate
+# allowlisted helper service (Phase 5), never through this unit.
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+[Install]
+WantedBy=multi-user.target

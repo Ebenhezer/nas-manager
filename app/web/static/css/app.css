@@ -1,0 +1,15 @@
+.card-header {
+  font-weight: 600;
+}
+
+.progress {
+  height: 0.9rem;
+}
+
+dt {
+  font-weight: 500;
+}
+
+dd {
+  overflow-wrap: anywhere;
+}

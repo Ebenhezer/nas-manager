@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
+  <h1 class="h3 mb-0">Dashboard</h1>
+  <div class="d-flex align-items-center gap-2">
+    <span id="health-badge" class="badge text-bg-secondary">checking…</span>
+    <span id="updated-at" class="text-body-secondary small"></span>
+  </div>
+</div>
+
+<div id="error-banner" class="alert alert-danger d-none" role="alert"></div>
+
+<div class="row g-3">
+  <div class="col-12 col-lg-6">
+    <div class="card h-100">
+      <div class="card-header">Host</div>
+      <div class="card-body">
+        <dl class="row mb-0">
+          <dt class="col-sm-4">Hostname</dt><dd class="col-sm-8" id="host-name">–</dd>
+          <dt class="col-sm-4">Operating system</dt><dd class="col-sm-8" id="host-os">–</dd>
+          <dt class="col-sm-4">Kernel</dt><dd class="col-sm-8" id="host-kernel">–</dd>
+          <dt class="col-sm-4">Uptime</dt><dd class="col-sm-8" id="host-uptime">–</dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-6">
+    <div class="card h-100">
+      <div class="card-header">CPU</div>
+      <div class="card-body">
+        <div class="d-flex justify-content-between mb-1">
+          <span>Utilisation</span><span id="cpu-percent">–</span>
+        </div>
+        <div class="progress mb-3" role="progressbar" aria-label="CPU utilisation"
+             aria-valuemin="0" aria-valuemax="100" id="cpu-progress">
+          <div class="progress-bar" id="cpu-bar"></div>
+        </div>
+        <div class="text-body-secondary small">
+          Load average (1/5/15 min): <span id="cpu-load">–</span>
+          · <span id="cpu-cores">–</span> logical cores
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-6">
+    <div class="card h-100">
+      <div class="card-header">Memory</div>
+      <div class="card-body">
+        <div class="d-flex justify-content-between mb-1">
+          <span>RAM</span><span id="mem-text">–</span>
+        </div>
+        <div class="progress mb-3" role="progressbar" aria-label="Memory usage"
+             aria-valuemin="0" aria-valuemax="100" id="mem-progress">
+          <div class="progress-bar" id="mem-bar"></div>
+        </div>
+        <div class="d-flex justify-content-between mb-1">
+          <span>Swap</span><span id="swap-text">–</span>
+        </div>
+        <div class="progress" role="progressbar" aria-label="Swap usage"
+             aria-valuemin="0" aria-valuemax="100" id="swap-progress">
+          <div class="progress-bar" id="swap-bar"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-6">
+    <div class="card h-100">
+      <div class="card-header">Network (since boot)</div>
+      <div class="card-body">
+        <dl class="row mb-0">
+          <dt class="col-sm-4">Sent</dt><dd class="col-sm-8" id="net-sent">–</dd>
+          <dt class="col-sm-4">Received</dt><dd class="col-sm-8" id="net-recv">–</dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">Storage</div>
+      <ul class="list-group list-group-flush" id="disk-list">
+        <li class="list-group-item text-body-secondary">Loading…</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<p class="text-body-secondary small mt-4 mb-0">
+  Host metrics only. Disk discovery, RAID, services and process monitoring arrive
+  in later phases.
+</p>
+{% endblock %}
+{% block scripts %}
+<script type="module" src="{{ url_for('static', path='js/dashboard.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Log in · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="mx-auto" style="max-width: 26rem">
+  <h1 class="h3 mb-4">Log in</h1>
+  {% if error %}<div class="alert alert-danger" role="alert">{{ error }}</div>{% endif %}
+  <form method="post" action="/login" class="card card-body">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <div class="mb-3">
+      <label class="form-label" for="username">Username</label>
+      <input class="form-control" id="username" name="username" autocomplete="username"
+             autocapitalize="none" spellcheck="false" required autofocus>
+    </div>
+    <div class="mb-3">
+      <label class="form-label" for="password">Password</label>
+      <input class="form-control" type="password" id="password" name="password"
+             autocomplete="current-password" required>
+    </div>
+    <button type="submit" class="btn btn-primary">Log in</button>
+  </form>
+  <p class="text-body-secondary small mt-3 mb-0">
+    On a fresh install, create the administrator with
+    <code>python -m app.cli bootstrap-admin</code> on the server.
+  </p>
+</div>
+{% endblock %}

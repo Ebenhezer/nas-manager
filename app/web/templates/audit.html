@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Audit log · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
+  <h1 class="h3 mb-0">Audit log</h1>
+  <span id="audit-total" class="text-body-secondary small"></span>
+</div>
+<div id="error-banner" class="alert alert-danger d-none" role="alert"></div>
+
+<div class="card mb-4">
+  <div class="card-body">
+    <form id="audit-filter" class="row g-3">
+      <div class="col-12 col-md-3">
+        <label class="form-label" for="af-category">Category</label>
+        <select class="form-select" id="af-category" name="category">
+          <option value="">all</option>
+          <option>auth</option><option>user</option><option>group</option>
+          <option>role</option><option>system</option>
+        </select>
+      </div>
+      <div class="col-12 col-md-3">
+        <label class="form-label" for="af-outcome">Outcome</label>
+        <select class="form-select" id="af-outcome" name="outcome">
+          <option value="">all</option><option>success</option><option>failure</option>
+        </select>
+      </div>
+      <div class="col-12 col-md-3">
+        <label class="form-label" for="af-actor">Actor</label>
+        <input class="form-control" id="af-actor" name="actor" autocapitalize="none">
+      </div>
+      <div class="col-12 col-md-3 d-flex align-items-end gap-2">
+        <button type="submit" class="btn btn-primary">Filter</button>
+        <button type="button" id="audit-prev" class="btn btn-outline-secondary">Newer</button>
+        <button type="button" id="audit-next" class="btn btn-outline-secondary">Older</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-striped align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Time (UTC)</th><th>Category</th><th>Event</th><th>Outcome</th>
+          <th>Actor</th><th>Target</th><th>IP</th>
+        </tr>
+      </thead>
+      <tbody id="audit-body"></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script type="module" src="{{ url_for('static', path='js/audit.js') }}"></script>
+{% endblock %}

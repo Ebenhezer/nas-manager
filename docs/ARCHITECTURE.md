@@ -1,0 +1,76 @@
+# Architecture
+
+## Layers
+
+```
+HTTP request
+   │
+   ▼
+RequestContextMiddleware   request id, access log, security headers
+   ▼
+CSRFProtectMiddleware      double-submit + session-bound token check
+   │
+   ├── /api/v1/*   app/api/v1/*      thin routes, no business logic
+   │                    │
+   │                    ▼
+   │              app/services/*     business logic, system access
+   │                    │
+   │                    ▼
+   │              app/models/*       SQLAlchemy ORM    ←→  migrations/ (Alembic)
+   │              app/schemas/*      Pydantic request/response models
+   │
+   └── /           app/web/*         Jinja2 templates + static assets
+                                     (Bootstrap vendored, modular ES JavaScript)
+```
+
+Rules: routes validate and delegate; services hold logic and talk to the OS or database; schemas define the API contract; models define persistence. Background jobs will live in `app/jobs/` (not created yet).
+
+## Module map
+
+| Module | Responsibility |
+|--------|----------------|
+| `app/main.py` | Application factory: logging, directories, database, middleware, routers, startup checks |
+| `app/__main__.py` | `python -m app` entry point (uvicorn, application-controlled logging) |
+| `app/cli.py` | `python -m app.cli bootstrap-admin` (first-run administrator) |
+| `app/core/config.py` | `Settings` from `NAS_*` variables (incl. sessions, throttling, Argon2id costs) |
+| `app/core/logging.py` | JSON/text formatters, redaction, rotating file handler |
+| `app/core/middleware.py` | Request id, access log (path only, never query string), security headers |
+| `app/core/csrf.py` | CSRF protection middleware (double-submit + session-bound) |
+| `app/core/errors.py` | `AppError` hierarchy and the JSON error envelope |
+| `app/core/permissions.py` | Permission-token registry and default role grants |
+| `app/db/` | Naming conventions, engine/session factory, migration helpers, `get_db` |
+| `app/api/v1/deps.py` | `CurrentUser`, `get_current_user`, `require_permission(...)` |
+| `app/api/v1/` | `auth`, `users`, `groups`, `roles`, `audit`, `health`, `system` |
+| `app/services/` | `passwords`, `auth_service`, `users_service`, `groups_service`, `roles_service`, `security`, `audit`, `throttle`, `bootstrap_service`, `health`, `monitoring`, `settings_service` |
+| `app/web/` | Jinja2 templates + modular JS (login, dashboard, users, groups, audit, profile) |
+
+## Authentication and authorization
+
+1. `POST /api/v1/auth/login` (or the `/login` form) verifies the password with Argon2id after a per-IP throttle check, then creates a server-side `auth_sessions` row. The database stores only SHA-256 of the token and of the CSRF token; the browser keeps the raw session token in an `HttpOnly` cookie.
+2. Every request passes through `CSRFProtectMiddleware`: state-changing requests that carry the `nas_csrf` cookie must echo it (`X-CSRF-Token` header or `_csrf` form field), and authenticated requests must additionally match the digest bound to their session.
+3. `get_current_user` resolves the session cookie, rejects revoked/expired sessions and deactivated users, and slides the idle expiry window. `require_permission("permission")` guards each route: 401 anonymous, 403 without the permission.
+4. Effective permissions = union of the permissions of the user's direct roles and of the roles granted to the user's groups (`app/services/security.py`).
+5. Login abuse controls: persistent per-account lockout (threshold and cooldown in settings) plus an in-process per-IP sliding window (429). All outcomes are written to `audit_events`.
+
+## Database
+
+SQLAlchemy 2 with a naming convention so constraints are stable across SQLite and PostgreSQL. The backend is selected purely by `NAS_DATABASE_URL`; SQLite gets WAL, `foreign_keys=ON` and a busy timeout on every connection. Alembic runs in batch mode for SQLite `ALTER` support. Models are registered in `app/models/__init__.py`, and a test asserts that models and migrations have no drift. Timestamps stored by auth code are naive UTC wall-clock (SQLite serialises `DateTime` without an offset); `app/db/base.py` exposes both `utcnow()` and `utcnow_naive()`.
+
+## Request lifecycle and observability
+
+Every response carries `X-Request-ID`. A client-supplied id is honoured only if it matches `[A-Za-z0-9-]{1,64}`; otherwise a new one is generated. The id is in each log line and in the error envelope, and it is recorded on every audit event. Logs go to stdout (journald under systemd) and to a size-rotated file. Extra fields whose names look sensitive (`password`, `token`, `secret`, `authorization`, `api_key`, `credential`) are replaced with `***`.
+
+## Deployment topology
+
+```
+systemd: nas-manager.service   (user nas-manager, no capabilities, sandboxed)
+   └── uvicorn → FastAPI app → SQLite in /var/lib/nas-manager
+systemd: nas-manager-helper.service   (Phase 5, planned)
+   └── root-owned Unix socket, fixed allowlist of validated operations
+```
+
+The web process never executes arbitrary commands and never runs as root. The helper does not exist yet; any feature needing privileges must wait for it.
+
+## Planned additions
+
+Samba/files (3), upload quotas (4), privileged helper + disks/RAID (5), tokens (6), sync engine and persistent job queue (7), gallery (8), streaming (9), alerting (10), backups (11), config export/import (12), audit/syslog (13).

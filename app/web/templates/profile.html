@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Profile · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between gap-2 mb-4">
+  <h1 class="h3 mb-0">Profile</h1>
+  <span class="text-body-secondary small">Signed in as <strong>{{ user.username }}</strong></span>
+</div>
+<div id="error-banner" class="alert alert-danger d-none" role="alert"></div>
+<div id="success-banner" class="alert alert-success d-none" role="alert"></div>
+
+<div class="mx-auto" style="max-width: 28rem">
+  <form id="change-password-form" class="card card-body">
+    <div class="mb-3">
+      <label class="form-label" for="cp-current">Current password</label>
+      <input class="form-control" type="password" id="cp-current" autocomplete="current-password" required>
+    </div>
+    <div class="mb-3">
+      <label class="form-label" for="cp-new">New password</label>
+      <input class="form-control" type="password" id="cp-new" autocomplete="new-password" required
+             minlength="12">
+    </div>
+    <button type="submit" class="btn btn-primary">Change password</button>
+  </form>
+  <p class="text-body-secondary small mt-3 mb-0">
+    New passwords must be at least 12 characters and different from the username.
+  </p>
+</div>
+{% endblock %}
+{% block scripts %}
+<script type="module" src="{{ url_for('static', path='js/profile.js') }}"></script>
+{% endblock %}
