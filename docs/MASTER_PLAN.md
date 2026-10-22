@@ -1,9 +1,8 @@
 # NAS Manager — Master Plan
 
-> Status: Phases 1 and 2 are **done and verified** (see
-> `docs/IMPLEMENTATION_PLAN.md`). **Phase 3 (File manager and Samba
-> integration) is next.** This file is the authoritative copy of the project
-> contract below.
+> Status: Phases 1–3 are **done and verified** (see `docs/IMPLEMENTATION_PLAN.md`).
+> **Phase 4 (Public upload folder and quotas) is next.** This file is the
+> authoritative copy of the project contract below.
 
 ---
 

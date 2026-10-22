@@ -49,7 +49,7 @@ def test_first_login_page_embeds_matching_csrf_token(client: TestClient) -> None
 
 
 def test_management_pages_require_authentication(client: TestClient) -> None:
-    for path in ["/users", "/groups", "/audit", "/profile"]:
+    for path in ["/users", "/groups", "/audit", "/profile", "/files", "/samba", "/settings"]:
         response = client.get(path, follow_redirects=False)
         assert response.status_code == 302, path
         assert response.headers["location"] == "/login", path
@@ -58,6 +58,17 @@ def test_management_pages_require_authentication(client: TestClient) -> None:
 def test_dashboard_has_no_inline_script_or_style(page: TestClient) -> None:
     """The CSP forbids inline code; templates must not rely on it."""
     html = page.get("/").text.lower()
+    assert "<style" not in html
+    assert " style=" not in html
+    assert "onclick=" not in html
+    inline_scripts = [s for s in html.split("<script")[1:] if "src=" not in s.split(">")[0]]
+    assert inline_scripts == []
+
+
+@pytest.mark.parametrize("path", ["/files", "/samba", "/settings"])
+def test_phase3_pages_have_no_inline_script_or_style(page: TestClient, path: str) -> None:
+    """Phase 3 pages must stay within the same CSP (no inline code)."""
+    html = page.get(path).text.lower()
     assert "<style" not in html
     assert " style=" not in html
     assert "onclick=" not in html
@@ -77,6 +88,9 @@ def test_dashboard_has_no_inline_script_or_style(page: TestClient) -> None:
         "/static/js/groups.js",
         "/static/js/audit.js",
         "/static/js/profile.js",
+        "/static/js/files.js",
+        "/static/js/samba.js",
+        "/static/js/settings.js",
         "/static/vendor/bootstrap/bootstrap.min.css",
         "/static/vendor/bootstrap/bootstrap.bundle.min.js",
     ],

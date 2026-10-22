@@ -20,6 +20,7 @@ CATEGORY_USER = "user"
 CATEGORY_GROUP = "group"
 CATEGORY_ROLE = "role"
 CATEGORY_SYSTEM = "system"
+CATEGORY_SETTINGS = "settings"
 CATEGORY_FILE = "file"
 CATEGORY_SAMBA = "samba"
 
@@ -58,6 +59,22 @@ ROLE_UPDATED = "role.updated"
 ROLE_DELETED = "role.deleted"
 ROLE_PERMISSIONS_CHANGED = "role.permissions_changed"
 USER_ROLES_CHANGED = "user.roles_changed"
+
+# settings events
+SETTINGS_UPDATED = "settings.updated"
+
+# file events (Phase 3)
+FILE_UPLOADED = "file.uploaded"
+FILE_DOWNLOADED = "file.downloaded"
+FILE_DELETED = "file.deleted"
+FILE_RENAMED = "file.renamed"
+FILE_CREATED_DIR = "file.created_dir"
+
+# samba events (Phase 3)
+SAMBA_SHARE_CREATED = "samba.share.created"
+SAMBA_SHARE_UPDATED = "samba.share.updated"
+SAMBA_SHARE_DELETED = "samba.share.deleted"
+SAMBA_CONFIG_APPLIED = "samba.config.applied"
 
 
 def record_audit_event(

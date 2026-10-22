@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Files · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
+  <h1 class="h3 mb-0">Files</h1>
+  <div class="d-flex gap-2 align-items-center">
+    <select id="root-select" class="form-select form-select-sm" aria-label="Managed root"></select>
+    <input id="search-input" class="form-control form-control-sm" type="search"
+           placeholder="Search names…">
+  </div>
+</div>
+<div id="error-banner" class="alert alert-danger d-none" role="alert"></div>
+<div class="card mb-3">
+  <div class="card-body py-2 d-flex flex-wrap align-items-center gap-2">
+    <nav aria-label="Breadcrumb"><ol id="breadcrumb" class="breadcrumb mb-0"></ol></nav>
+    {% if can('files:write') %}
+    <div class="ms-auto d-flex flex-wrap gap-2 align-items-center">
+      <form id="upload-form" class="d-flex gap-2 align-items-center">
+        <input type="file" id="upload-input" class="form-control form-control-sm" required>
+        <button type="submit" class="btn btn-sm btn-primary">Upload</button>
+      </form>
+      <button type="button" id="mkdir-btn" class="btn btn-sm btn-outline-secondary">New folder</button>
+    </div>
+    {% endif %}
+  </div>
+</div>
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-striped align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Size</th>
+          <th>Modified</th>
+          {% if can('files:write') %}<th class="text-end">Actions</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody id="files-body"></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script type="module" src="{{ url_for('static', path='js/files.js') }}"></script>
+{% endblock %}

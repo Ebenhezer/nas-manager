@@ -173,6 +173,42 @@ def audit_page(
     return templates.TemplateResponse(request, "audit.html", _page_context(request, current))
 
 
+@router.get("/files", response_class=HTMLResponse)
+def files_page(
+    request: Request, current: CurrentUser | None = Depends(resolve_web_user)
+) -> Response:
+    redirect = _protected(current)
+    if redirect is not None:
+        return redirect
+    if current is None or "files:read" not in current.permissions:
+        raise UnauthorizedError("Missing required permission: files:read")
+    return templates.TemplateResponse(request, "files.html", _page_context(request, current))
+
+
+@router.get("/samba", response_class=HTMLResponse)
+def samba_page(
+    request: Request, current: CurrentUser | None = Depends(resolve_web_user)
+) -> Response:
+    redirect = _protected(current)
+    if redirect is not None:
+        return redirect
+    if current is None or "samba:read" not in current.permissions:
+        raise UnauthorizedError("Missing required permission: samba:read")
+    return templates.TemplateResponse(request, "samba.html", _page_context(request, current))
+
+
+@router.get("/settings", response_class=HTMLResponse)
+def settings_page(
+    request: Request, current: CurrentUser | None = Depends(resolve_web_user)
+) -> Response:
+    redirect = _protected(current)
+    if redirect is not None:
+        return redirect
+    if current is None or "settings:read" not in current.permissions:
+        raise UnauthorizedError("Missing required permission: settings:read")
+    return templates.TemplateResponse(request, "settings.html", _page_context(request, current))
+
+
 @router.get("/profile", response_class=HTMLResponse)
 def profile_page(
     request: Request, current: CurrentUser | None = Depends(resolve_web_user)

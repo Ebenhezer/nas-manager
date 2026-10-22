@@ -73,10 +73,41 @@ class Settings(BaseSettings):
     # not given. Not a secret.
     admin_username: str = "admin"
 
-    @field_validator("data_dir", "log_dir")
+    # ------------------------------------------------------------------
+    # File manager. NAS_FILE_ROOTS is the list of absolute directories the
+    # file manager may access (the "jail": every requested path is resolved
+    # against one of these and rejected if it escapes). When empty, the
+    # default root <data_dir>/files is used.
+    # ------------------------------------------------------------------
+    file_roots: list[Path] = Field(default_factory=list)
+    max_upload_bytes: int = Field(default=2 * 1024 * 1024 * 1024, ge=1024 * 1024)
+    file_search_limit: int = Field(default=200, ge=1, le=10000)
+
+    # ------------------------------------------------------------------
+    # Samba integration. NAS_SAMBA_CONFIG_PATH is where smb.conf is
+    # rendered (default: the system path). The web process never runs as
+    # root and must not gain privileges, so it validates with testparm and
+    # backs up before writing; reloading smbd is a privileged operation
+    # deferred to the Phase 5 helper (status reports reload_required).
+    # ------------------------------------------------------------------
+    samba_config_path: Path = Path("/etc/samba/smb.conf")
+    samba_backup_dir: Path | None = None
+
+    @field_validator("data_dir", "log_dir", "samba_config_path", "samba_backup_dir")
     @classmethod
     def _absolute(cls, value: Path | None) -> Path | None:
         return None if value is None else value.expanduser().resolve()
+
+    @field_validator("file_roots")
+    @classmethod
+    def _file_roots_absolute(cls, value: list[Path]) -> list[Path]:
+        resolved: list[Path] = []
+        for item in value:
+            absolute = item.expanduser().resolve()
+            if not absolute.is_absolute():
+                raise ValueError(f"file root must be an absolute path: {item}")
+            resolved.append(absolute)
+        return resolved
 
     @field_validator("session_cookie_name", "csrf_cookie_name")
     @classmethod
@@ -101,6 +132,21 @@ class Settings(BaseSettings):
         return self.log_dir if self.log_dir is not None else self.data_dir / "logs"
 
     @property
+    def resolved_file_roots(self) -> list[Path]:
+        """The file manager's jail roots; the default root when none are set."""
+        if self.file_roots:
+            return list(self.file_roots)
+        return [self.data_dir / "files"]
+
+    @property
+    def resolved_samba_backup_dir(self) -> Path:
+        return (
+            self.samba_backup_dir
+            if self.samba_backup_dir is not None
+            else self.data_dir / "samba-backups"
+        )
+
+    @property
     def resolved_database_url(self) -> str:
         if self.database_url is not None:
             return self.database_url
@@ -110,6 +156,10 @@ class Settings(BaseSettings):
         """Create state directories (never removes or overwrites anything)."""
         self.data_dir.mkdir(parents=True, exist_ok=True, mode=0o750)
         self.resolved_log_dir.mkdir(parents=True, exist_ok=True, mode=0o750)
+        if not self.file_roots:
+            # The default managed file root; explicitly configured roots are
+            # the operator's responsibility and are never auto-created.
+            (self.data_dir / "files").mkdir(parents=True, exist_ok=True, mode=0o750)
 
 
 @lru_cache

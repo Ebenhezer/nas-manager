@@ -40,9 +40,10 @@ Rules: routes validate and delegate; services hold logic and talk to the OS or d
 | `app/core/permissions.py` | Permission-token registry and default role grants |
 | `app/db/` | Naming conventions, engine/session factory, migration helpers, `get_db` |
 | `app/api/v1/deps.py` | `CurrentUser`, `get_current_user`, `require_permission(...)` |
-| `app/api/v1/` | `auth`, `users`, `groups`, `roles`, `audit`, `health`, `system` |
-| `app/services/` | `passwords`, `auth_service`, `users_service`, `groups_service`, `roles_service`, `security`, `audit`, `throttle`, `bootstrap_service`, `health`, `monitoring`, `settings_service` |
-| `app/web/` | Jinja2 templates + modular JS (login, dashboard, users, groups, audit, profile) |
+| `app/api/v1/` | `auth`, `users`, `groups`, `roles`, `audit`, `health`, `system`, `files`, `samba`, `settings` |
+| `app/services/` | `passwords`, `auth_service`, `users_service`, `groups_service`, `roles_service`, `security`, `audit`, `throttle`, `bootstrap_service`, `health`, `monitoring`, `settings_service`, `files`, `samba` |
+| `app/models/` | `user`, `group`, `role`, `session`, `audit_event`, `app_setting`, `samba_share` |
+| `app/web/` | Jinja2 templates + modular JS (login, dashboard, users, groups, audit, profile, files, samba, settings) |
 
 ## Authentication and authorization
 
@@ -71,6 +72,12 @@ systemd: nas-manager-helper.service   (Phase 5, planned)
 
 The web process never executes arbitrary commands and never runs as root. The helper does not exist yet; any feature needing privileges must wait for it.
 
+## File manager and Samba (Phase 3)
+
+- **File manager.** `app/services/files.py` is the only module that touches the managed filesystem. It resolves every requested path against one of the configured roots (`NAS_FILE_ROOTS`, default `<data_dir>/files`) with `Path.resolve()` + `is_relative_to` and refuses absolute paths, `..` traversal, null bytes and symlinks that resolve outside the root. Listing/search use `lstat` and `os.walk(followlinks=False)`; uploads stream to a `.nas-upload-*.part` temp file in the destination and are atomically renamed, so a partial upload never appears under the final name and the size cap cannot be bypassed. All mutations and downloads are audited.
+- **Samba.** `app/services/samba.py` renders the database's `samba_shares` into a managed section delimited by `# ==== NAS-MANAGER MANAGED BEGIN/END ====` markers, preserving every line outside it. Before writing it validates the result with `testparm -s` against a temporary copy (mocked in tests), backs up the previous config into `NAS_SAMBA_BACKUP_DIR` and writes atomically. The web process is unprivileged: reloading `smbd` is a privileged step deferred to the Phase 5 helper, so status reports `reload_required` and no privileged command is ever executed here.
+- **Runtime settings.** `app/services/settings_service.py` stores non-secret key/value switches in `app_settings` (e.g. `operator_view_files_samba`). `app/services/security.py::effective_permissions_for_user` consults that switch, so the API guards and the web pages pick it up without separate plumbing.
+
 ## Planned additions
 
-Samba/files (3), upload quotas (4), privileged helper + disks/RAID (5), tokens (6), sync engine and persistent job queue (7), gallery (8), streaming (9), alerting (10), backups (11), config export/import (12), audit/syslog (13).
+Upload quotas (4), privileged helper + disks/RAID (5), tokens (6), sync engine and persistent job queue (7), gallery (8), streaming (9), alerting (10), backups (11), config export/import (12), audit/syslog (13).

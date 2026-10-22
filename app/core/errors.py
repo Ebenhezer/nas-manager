@@ -61,6 +61,16 @@ class TooManyRequestsError(AppError):
     code = "too_many_requests"
 
 
+class ConfigurationError(AppError):
+    """An environment/operational problem prevented a managed subsystem from
+    being configured (e.g. the Samba config path is not writable or the
+    validator binary is missing). 500: the request was fine, the host is not.
+    """
+
+    status_code = 500
+    code = "configuration_error"
+
+
 def _request_id(request: Request) -> str | None:
     value = getattr(request.state, "request_id", None)
     return value if isinstance(value, str) else None

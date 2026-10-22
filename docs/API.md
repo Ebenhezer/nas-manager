@@ -39,7 +39,7 @@ Codes in use: `http_error` (404, 405, ...), `validation_error` (422), `conflict`
   "status": "ok",
   "version": "0.1.0",
   "environment": "production",
-  "database": {"reachable": true, "schema_current": true, "revision": "0002", "head_revision": "0002"}
+  "database": {"reachable": true, "schema_current": true, "revision": "0003", "head_revision": "0003"}
 }
 ```
 
@@ -133,6 +133,36 @@ Host snapshot used by the dashboard.
 
 Notes: byte values are integers; `cpu.percent` is measured since the previous call (the first call after start may be low); `disks` lists `/` and the data directory, collapsed to one entry when they share a filesystem.
 
+## Files (`files:read` / `files:write`)
+
+The file manager operates only inside the configured managed roots (`NAS_FILE_ROOTS`; default `<data_dir>/files`). Every path is resolved against a root and **rejected** when it escapes (absolute paths, `..`, null bytes, symlinks out of the root).
+
+- `GET /files/roots` → list of configured root paths.
+- `GET /files/list?root=<root>&path=<rel>` → `{"root", "path", "entries": [{"name", "path", "is_dir", "size", "modified", "mode"}]}` (directories first, then name).
+- `GET /files/content?root=<root>&path=<rel>` → file bytes (`Content-Disposition: attachment`).
+- `GET /files/search?root=<root>&q=<text>&limit=<n>` → case-insensitive name matches, bounded (`limit` defaults to `NAS_FILE_SEARCH_LIMIT`).
+- `POST /files/upload` (multipart) — fields: `file`, `root`, `path` (optional target directory), `overwrite` (optional). Streamed; rejects anything above `NAS_MAX_UPLOAD_BYTES` (400) and refuses to overwrite without `overwrite=true` (409).
+- `POST /files/mkdir` — `{"root", "path", "name"}` (201/200 entry).
+- `PATCH /files/rename` — `{"root", "path", "new_name"}` (same-directory only; names may not contain `/`).
+- `DELETE /files` — body `{"root", "path", "recursive": false}`. Empty directories may be deleted without `recursive`; non-empty directories require `recursive=true` (400 otherwise).
+
+Mutations and downloads are audited (`file.uploaded`, `file.downloaded`, `file.deleted`, `file.renamed`, `file.created_dir`).
+
+## Samba (`samba:read` / `samba:write`)
+
+- `GET /samba/shares` → list of shares.
+- `POST /samba/shares` (201) — `{"name", "path", "comment", "read_only", "browseable", "guest_ok", "valid_users", "write_list", "enabled"}`. Name is lower-cased; `path` must be an absolute existing directory; free-text fields must be single-line (400 on config-injection attempts); duplicate names → 409.
+- `GET /samba/shares/{id}` · `PATCH /samba/shares/{id}` (partial update) · `DELETE /samba/shares/{id}` (204).
+- `GET /samba/status` → `{"config_path", "config_exists", "managed_markers_present", "managed_share_count", "backup_dir", "pending_changes", "reload_required", "message"}`.
+- `POST /samba/apply` — renders, validates (`testparm -s` against a temp copy), backs up and atomically writes `smb.conf`. Invalid config → 400 (nothing written); config path not writable / `testparm` missing → 500 `configuration_error`. Reloading `smbd` is a privileged step deferred to the Phase 5 helper, so the result reports `reload_required: true`.
+
+Share changes and applies are audited (`samba.share.created/updated/deleted`, `samba.config.applied`).
+
+## Settings (`settings:read` / `settings:write`)
+
+- `GET /settings` → `{"operator_view_files_samba": bool}`.
+- `PUT /settings` — body `{"operator_view_files_samba": bool}`. When enabled, users holding the `operator` role may **view** the Files and Samba pages (read-only); writes are never granted by this switch. Default is off. Changes are audited (`settings.updated`).
+
 ## Planned
 
-Files and shares (Phase 3), upload quotas (4), tokens, resumable transfers and sync cursors (6). Each phase will extend this document.
+Upload quotas (4), tokens, resumable transfers and sync cursors (6). Each phase will extend this document.

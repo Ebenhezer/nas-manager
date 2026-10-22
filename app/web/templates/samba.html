@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Samba · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
+  <h1 class="h3 mb-0">Samba shares</h1>
+  {% if can('samba:write') %}
+  <button type="button" id="apply-btn" class="btn btn-primary">Apply configuration</button>
+  {% endif %}
+</div>
+<div id="error-banner" class="alert alert-danger d-none" role="alert"></div>
+<div id="status-card" class="mb-4"></div>
+
+{% if can('samba:write') %}
+<div class="card mb-4">
+  <div class="card-header" id="share-form-header">New share</div>
+  <div class="card-body">
+    <form id="share-form" class="row g-3">
+      <input type="hidden" id="share-id" name="id" value="">
+      <div class="col-12 col-md-4">
+        <label class="form-label" for="sf-name">Name</label>
+        <input class="form-control" id="sf-name" name="name" required
+               autocapitalize="none" spellcheck="false" maxlength="64">
+      </div>
+      <div class="col-12 col-md-8">
+        <label class="form-label" for="sf-path">Path (absolute directory)</label>
+        <input class="form-control" id="sf-path" name="path" required maxlength="1024">
+      </div>
+      <div class="col-12">
+        <label class="form-label" for="sf-comment">Comment</label>
+        <input class="form-control" id="sf-comment" name="comment" maxlength="4000">
+      </div>
+      <div class="col-12 col-md-3">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="sf-read-only" name="read_only">
+          <label class="form-check-label" for="sf-read-only">Read only</label>
+        </div>
+      </div>
+      <div class="col-12 col-md-3">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="sf-browseable" name="browseable" checked>
+          <label class="form-check-label" for="sf-browseable">Browseable</label>
+        </div>
+      </div>
+      <div class="col-12 col-md-3">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="sf-guest-ok" name="guest_ok">
+          <label class="form-check-label" for="sf-guest-ok">Allow guest</label>
+        </div>
+      </div>
+      <div class="col-12 col-md-3">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="sf-enabled" name="enabled" checked>
+          <label class="form-check-label" for="sf-enabled">Enabled</label>
+        </div>
+      </div>
+      <div class="col-12 col-md-6">
+        <label class="form-label" for="sf-valid-users">Valid users (space separated)</label>
+        <input class="form-control" id="sf-valid-users" name="valid_users" maxlength="4000"
+               placeholder="alice bob or @staff">
+      </div>
+      <div class="col-12 col-md-6">
+        <label class="form-label" for="sf-write-list">Write list (space separated)</label>
+        <input class="form-control" id="sf-write-list" name="write_list" maxlength="4000"
+               placeholder="alice bob or @staff">
+      </div>
+      <div class="col-12 d-flex gap-2">
+        <button type="submit" class="btn btn-primary" id="share-submit">Create share</button>
+        <button type="button" class="btn btn-outline-secondary d-none" id="share-cancel">Cancel edit</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-header">Shares</div>
+  <div class="table-responsive">
+    <table class="table table-striped align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Path</th>
+          <th>Read only</th>
+          <th>Browseable</th>
+          <th>Guest</th>
+          <th>Enabled</th>
+          {% if can('samba:write') %}<th class="text-end">Actions</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody id="shares-body"></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script type="module" src="{{ url_for('static', path='js/samba.js') }}"></script>
+{% endblock %}

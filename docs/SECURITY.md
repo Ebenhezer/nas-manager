@@ -1,6 +1,6 @@
 # Security
 
-Status after Phase 2: sessions, RBAC, CSRF and audit logging are in place. The interactive dashboard and the management API require authentication.
+Status after Phase 3: sessions, RBAC, CSRF and audit logging are in place, and the file manager (path-jailed) and Samba share management (validated, merged config) are implemented. The interactive dashboard and all management pages require authentication.
 
 ## Controls in place
 
@@ -19,6 +19,9 @@ Status after Phase 2: sessions, RBAC, CSRF and audit logging are in place. The i
 | Request-id validation | Client ids restricted to `[A-Za-z0-9-]{1,64}` to prevent log injection (tested). |
 | Security headers | `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, and `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'; object-src 'none'` (tested). |
 | CSP-compatible UI | No inline script or style; DOM is built with `textContent` (no `innerHTML`). A test fails if inline code appears. |
+| File manager path jail | Every requested path is resolved against a configured managed root and rejected when it escapes (`..`, absolute paths, null bytes, symlinks resolving outside the root). Listing/search never follow symlinks; uploads stream to a temp file and are atomically renamed, and the per-file cap (`NAS_MAX_UPLOAD_BYTES`) is enforced mid-stream so concurrent uploads cannot bypass it. Tested, including symlink escape. |
+| Samba config safety | The DB is the source of truth; `smb.conf` is only touched inside the managed markers, validated with `testparm -s` against a temp copy before writing, backed up first, written atomically. Free-text share fields reject newlines (no config injection); share names are restricted to `[a-z0-9][a-z0-9._-]*`. Reloading `smbd` is deferred to the Phase 5 privileged helper — this module never runs privileged commands. Tested. |
+| Least privilege / operator toggle | `operator`/`viewer` cannot open Files/Samba by default. Admin may flip `operator_view_files_samba` in Settings to grant operators read-only access; the toggle never grants write permissions and is audited. Tested. |
 | Static file serving | Path traversal attempts against `/static` return 400/404 (tested). |
 | Error hygiene | Unhandled exceptions return a generic 500 envelope with a request id and no internals (tested). |
 | API docs | Swagger/OpenAPI disabled unless `NAS_DEBUG=true`. |
@@ -36,10 +39,9 @@ The privileged helper (Phase 5), API tokens and mobile clients (6), secret encry
 
 ## Rules for later phases (from the project instructions)
 
-- The web process must never run as root; privileged actions go through an allowlisted helper that never executes client-supplied commands.
+- The web process must never run as root; privileged actions (e.g. reloading `smbd`, disk administration) go through an allowlisted helper that never executes client-supplied commands. The Samba apply step already stops at the boundary and reports `reload_required`.
 - No automatic format, partition, destructive mount, erase or RAID rebuild. Read-only discovery by default; dry-run and explicit confirmation for destructive operations.
-- Validate Samba configuration before reload; back up and preserve unmanaged settings.
-- Prevent path traversal, public folder browsing, and quota bypass through concurrent uploads.
+- Path traversal is already prevented in the file manager; public folder browsing restrictions and quota enforcement are Phase 4, and quota checks must stay atomic against concurrent uploads.
 - Never delete data silently during two-way sync.
 - No plaintext passwords, API secrets or cloud credentials; exports must protect secrets; imports must be validated and reversible.
 

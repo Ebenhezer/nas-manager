@@ -6,11 +6,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Role, User
+from app.services.settings_service import operator_files_samba_view_enabled
 
 
 def effective_permissions_for_user(session: Session, user: User) -> frozenset[str]:
     """Union of the permissions granted directly to the user's roles and to
-    their groups' roles. Nothing else counts."""
+    their groups' roles. Nothing else counts — except the runtime policy
+    toggle that lets holders of the built-in `operator` role view the Files
+    and Samba pages read-only (admin controls it in Settings)."""
     role_names = {role.name for role in user.roles}
     for group in user.groups:
         role_names.update(role.name for role in group.roles)
@@ -26,7 +29,17 @@ def effective_permissions_for_user(session: Session, user: User) -> frozenset[st
         .scalars()
         .all()
     )
-    return frozenset(permission_rows)
+    permissions = set(permission_rows)
+    if (
+        "operator" in role_names
+        and "files:read" not in permissions
+        and operator_files_samba_view_enabled(session)
+    ):
+        # Operators may view but never write Files/Samba. Write tokens are
+        # deliberately not granted here; the last-administrator and other
+        # guards query role_permissions directly and are unaffected.
+        permissions.update(("files:read", "samba:read"))
+    return frozenset(permissions)
 
 
 def username_is_taken(

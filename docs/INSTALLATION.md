@@ -56,6 +56,15 @@ The unit sets `NAS_DATA_DIR=/var/lib/nas-manager` and `NAS_LOG_DIR=/var/log/nas-
 
 Use `deploy/nas-manager.env.example` (not the development `.env.example`) for the service: systemd lets `EnvironmentFile=` override `Environment=`, so a `NAS_DATA_DIR` in the env file would override the unit's value.
 
+### File manager and Samba (Phase 3)
+
+- **File manager roots.** Set `NAS_FILE_ROOTS` to a JSON list of absolute directories you want to manage, e.g. `NAS_FILE_ROOTS='["/mnt/storage"]'`. When unset the file manager uses `<DATA_DIR>/files`. The web process must be able to read/write those directories (chown them to `nas-manager` or the group it belongs to). `NAS_MAX_UPLOAD_BYTES` caps each upload (default 2 GiB).
+- **Samba.** The app manages shares in its database and renders them into `smb.conf`. The web process runs unprivileged and **cannot write `/etc/samba/smb.conf`** in the default setup, so `POST /samba/apply` will report a `configuration_error` until a privileged path exists:
+  - Phase 5 introduces an allowlisted helper that will write the config and reload `smbd`. Until then, an operator can apply the rendered config manually (copy it out of the app's status/`apply` flow, or run the service with a writable `NAS_SAMBA_CONFIG_PATH` in a development setup) and run `sudo smbcontrol all reload-config`.
+  - For a dev/test setup that writes directly, point `NAS_SAMBA_CONFIG_PATH` at a writable file and `NAS_SAMBA_BACKUP_DIR` at a writable backup directory (default `<DATA_DIR>/samba-backups`).
+  - Samba must be installed on the host for validation (`testparm`). `apt install samba` provides it.
+- **Operators and Files/Samba.** By default only admin (or custom roles with `files:*`/`samba:*`) can open the Files and Samba pages. To let operators *view* them read-only, enable the **Settings → "Allow operators to view the Files and Samba pages"** toggle (stored per-installation; writes are never granted by it).
+
 Verify:
 
 ```bash

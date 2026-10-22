@@ -20,6 +20,9 @@
           <a class="nav-link" href="/">Dashboard</a>
           {% if can('users:read') %}<a class="nav-link" href="/users">Users</a>{% endif %}
           {% if can('groups:read') %}<a class="nav-link" href="/groups">Groups</a>{% endif %}
+          {% if can('files:read') %}<a class="nav-link" href="/files">Files</a>{% endif %}
+          {% if can('samba:read') %}<a class="nav-link" href="/samba">Samba</a>{% endif %}
+          {% if can('settings:read') %}<a class="nav-link" href="/settings">Settings</a>{% endif %}
           {% if can('audit:read') %}<a class="nav-link" href="/audit">Audit</a>{% endif %}
         </div>
         {% endif %}
