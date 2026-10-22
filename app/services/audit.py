@@ -23,6 +23,7 @@ CATEGORY_SYSTEM = "system"
 CATEGORY_SETTINGS = "settings"
 CATEGORY_FILE = "file"
 CATEGORY_SAMBA = "samba"
+CATEGORY_PUBLIC_UPLOAD = "public_upload"
 
 OUTCOME_SUCCESS = "success"
 OUTCOME_FAILURE = "failure"
@@ -75,6 +76,14 @@ SAMBA_SHARE_CREATED = "samba.share.created"
 SAMBA_SHARE_UPDATED = "samba.share.updated"
 SAMBA_SHARE_DELETED = "samba.share.deleted"
 SAMBA_CONFIG_APPLIED = "samba.config.applied"
+
+# public upload events (Phase 4)
+PUBLIC_UPLOAD_UPLOADED = "public_upload.uploaded"
+PUBLIC_UPLOAD_REJECTED = "public_upload.rejected"
+PUBLIC_UPLOAD_QUOTA_CHANGED = "public_upload.quota_changed"
+PUBLIC_UPLOAD_FILE_DELETED = "public_upload.file_deleted"
+PUBLIC_UPLOAD_CLEANUP = "public_upload.cleanup"
+PUBLIC_UPLOAD_TOGGLE_CHANGED = "public_upload.toggle_changed"
 
 
 def record_audit_event(

@@ -9,6 +9,8 @@ from typing import Literal, Self
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_GIB = 1024 ** 3
+
 
 class Settings(BaseSettings):
     """Typed settings. Nothing here is environment-specific by default."""
@@ -93,7 +95,23 @@ class Settings(BaseSettings):
     samba_config_path: Path = Path("/etc/samba/smb.conf")
     samba_backup_dir: Path | None = None
 
-    @field_validator("data_dir", "log_dir", "samba_config_path", "samba_backup_dir")
+    # ------------------------------------------------------------------
+    # Public upload folder (Phase 4). A dedicated drop folder that clients
+    # may write to without an account (upload-only: there is no public
+    # listing or download) and with strict per-uploader quotas. Uploads are
+    # keyed by the authenticated username when a session is present ("user:"),
+    # otherwise by the client IP address ("ip:"). NAS_PUBLIC_UPLOAD_ENABLED
+    # is the master switch; the Settings page can override it at runtime
+    # (stored in app_settings) without editing configuration files.
+    # ------------------------------------------------------------------
+    public_upload_dir: Path | None = None
+    public_upload_enabled: bool = True
+    public_upload_max_file_bytes: int = Field(default=_GIB, ge=1024)
+    public_upload_default_quota_bytes: int = Field(default=_GIB, ge=1)
+
+    @field_validator(
+        "data_dir", "log_dir", "samba_config_path", "samba_backup_dir", "public_upload_dir"
+    )
     @classmethod
     def _absolute(cls, value: Path | None) -> Path | None:
         return None if value is None else value.expanduser().resolve()
@@ -147,6 +165,15 @@ class Settings(BaseSettings):
         )
 
     @property
+    def resolved_public_upload_dir(self) -> Path:
+        """Where the public drop folder lives on disk."""
+        return (
+            self.public_upload_dir
+            if self.public_upload_dir is not None
+            else self.data_dir / "uploads"
+        )
+
+    @property
     def resolved_database_url(self) -> str:
         if self.database_url is not None:
             return self.database_url
@@ -160,6 +187,7 @@ class Settings(BaseSettings):
             # The default managed file root; explicitly configured roots are
             # the operator's responsibility and are never auto-created.
             (self.data_dir / "files").mkdir(parents=True, exist_ok=True, mode=0o750)
+        self.resolved_public_upload_dir.mkdir(parents=True, exist_ok=True, mode=0o750)
 
 
 @lru_cache

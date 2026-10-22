@@ -24,13 +24,15 @@ PERMISSIONS: list[str] = [
     "files:write",
     "samba:read",
     "samba:write",
+    "uploads:read",
+    "uploads:write",
 ]
 
 ALL_PERMISSIONS: frozenset[str] = frozenset(PERMISSIONS)
 
 ROLE_DESCRIPTIONS: dict[str, str] = {
     "admin": "Full access to every managed resource, including user and group management.",
-    "operator": "Read access to users, groups, roles, audit log, system and settings.",
+    "operator": "Read access to users, groups, roles, audit log, system, settings and public upload usage.",
     "viewer": "Read-only access to the dashboard.",
 }
 
@@ -44,6 +46,7 @@ ROLE_DEFAULT_PERMISSIONS: dict[str, list[str]] = {
         "audit:read",
         "system:read",
         "settings:read",
+        "uploads:read",
     ],
     "viewer": ["dashboard:read"],
 }

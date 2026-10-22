@@ -61,6 +61,13 @@ class TooManyRequestsError(AppError):
     code = "too_many_requests"
 
 
+class QuotaExceededError(AppError):
+    """A per-uploader quota (or the folder's per-file cap) was exceeded (413)."""
+
+    status_code = 413
+    code = "quota_exceeded"
+
+
 class ConfigurationError(AppError):
     """An environment/operational problem prevented a managed subsystem from
     being configured (e.g. the Samba config path is not writable or the

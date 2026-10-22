@@ -9,39 +9,143 @@
   <link href="{{ url_for('static', path='vendor/bootstrap/bootstrap.min.css') }}" rel="stylesheet">
   <link href="{{ url_for('static', path='css/app.css') }}" rel="stylesheet">
 </head>
-<body>
-  <nav class="navbar border-bottom">
-    <div class="container-xl">
-      <div class="d-flex align-items-center gap-3">
-        <span class="navbar-brand mb-0 h1">{{ app_name }}</span>
-        <span class="text-body-secondary small">v{{ version }}</span>
-        {% if user %}
-        <div class="d-flex align-items-center gap-3">
-          <a class="nav-link" href="/">Dashboard</a>
-          {% if can('users:read') %}<a class="nav-link" href="/users">Users</a>{% endif %}
-          {% if can('groups:read') %}<a class="nav-link" href="/groups">Groups</a>{% endif %}
-          {% if can('files:read') %}<a class="nav-link" href="/files">Files</a>{% endif %}
-          {% if can('samba:read') %}<a class="nav-link" href="/samba">Samba</a>{% endif %}
-          {% if can('settings:read') %}<a class="nav-link" href="/settings">Settings</a>{% endif %}
-          {% if can('audit:read') %}<a class="nav-link" href="/audit">Audit</a>{% endif %}
-        </div>
+<body class="{% block body_class %}app-page{% endblock %}">
+  {% block layout %}
+  <aside class="offcanvas-lg offcanvas-start app-sidebar" id="app-sidebar" tabindex="-1" aria-label="Main navigation">
+    <div class="offcanvas-header app-sidebar-header">
+      <a class="app-brand" href="/" aria-label="{{ app_name }} home">
+        <span class="app-brand-mark" aria-hidden="true">
+          <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="8" cy="8" r="3"/>
+            <circle cx="16" cy="8" r="3"/>
+            <circle cx="8" cy="16" r="3"/>
+            <circle cx="16" cy="16" r="3"/>
+          </svg>
+        </span>
+        <span class="app-brand-text">
+          <strong>{{ app_name }}</strong>
+          <span class="text-body-secondary small">v{{ version }}</span>
+        </span>
+      </a>
+      <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#app-sidebar" aria-label="Close"></button>
+    </div>
+    <div class="offcanvas-body app-sidebar-body">
+      <a class="app-brand d-none d-lg-flex mb-3" href="/" aria-label="{{ app_name }} home">
+        <span class="app-brand-mark" aria-hidden="true">
+          <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="8" cy="8" r="3"/>
+            <circle cx="16" cy="8" r="3"/>
+            <circle cx="8" cy="16" r="3"/>
+            <circle cx="16" cy="16" r="3"/>
+          </svg>
+        </span>
+        <span class="app-brand-text">
+          <strong>{{ app_name }}</strong>
+          <span class="text-body-secondary small">v{{ version }}</span>
+        </span>
+      </a>
+
+      <nav class="app-nav" aria-label="Main navigation">
+        <a class="app-nav-link{% if request.url.path == '/' %} active{% endif %}" href="/"{% if request.url.path == '/' %} aria-current="page"{% endif %}>
+          <svg class="app-nav-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="5" y="5" width="6" height="6"/>
+            <rect x="13" y="5" width="6" height="6"/>
+            <rect x="5" y="13" width="6" height="6"/>
+            <rect x="13" y="13" width="6" height="6"/>
+          </svg>
+          <span>Dashboard</span>
+        </a>
+        {% if can('users:read') %}
+        <a class="app-nav-link{% if request.url.path == '/users' %} active{% endif %}" href="/users"{% if request.url.path == '/users' %} aria-current="page"{% endif %}>
+          <svg class="app-nav-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="7" r="4.2"/>
+            <path d="M12 11v5M8 21h8"/>
+          </svg>
+          <span>Users</span>
+        </a>
         {% endif %}
+        {% if can('groups:read') %}
+        <a class="app-nav-link{% if request.url.path == '/groups' %} active{% endif %}" href="/groups"{% if request.url.path == '/groups' %} aria-current="page"{% endif %}>
+          <svg class="app-nav-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="8" cy="8" r="3.2"/>
+            <circle cx="16" cy="8" r="3.2"/>
+            <path d="M8 11v4M5 18h6M16 11v4M13 18h6"/>
+          </svg>
+          <span>Groups</span>
+        </a>
+        {% endif %}
+        {% if can('files:read') %}
+        <a class="app-nav-link{% if request.url.path == '/files' %} active{% endif %}" href="/files"{% if request.url.path == '/files' %} aria-current="page"{% endif %}>
+          <svg class="app-nav-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M8 3h8v3h-8zM4 6h16v12h-16z"/>
+          </svg>
+          <span>Files</span>
+        </a>
+        {% endif %}
+        {% if can('samba:read') %}
+        <a class="app-nav-link{% if request.url.path == '/samba' %} active{% endif %}" href="/samba"{% if request.url.path == '/samba' %} aria-current="page"{% endif %}>
+          <svg class="app-nav-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="7" cy="12" r="2.4"/>
+            <circle cx="17" cy="12" r="2.4"/>
+            <path d="M9.5 12h5"/>
+          </svg>
+          <span>Samba</span>
+        </a>
+        {% endif %}
+        {% if can('settings:read') %}
+        <a class="app-nav-link{% if request.url.path == '/settings' %} active{% endif %}" href="/settings"{% if request.url.path == '/settings' %} aria-current="page"{% endif %}>
+          <svg class="app-nav-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M5 6h14M5 12h14M5 18h14"/>
+            <circle cx="11" cy="6" r="1.6" fill="currentColor"/>
+            <circle cx="16" cy="12" r="1.6" fill="currentColor"/>
+            <circle cx="9" cy="18" r="1.6" fill="currentColor"/>
+          </svg>
+          <span>Settings</span>
+        </a>
+        {% endif %}
+        {% if can('audit:read') %}
+        <a class="app-nav-link{% if request.url.path == '/audit' %} active{% endif %}" href="/audit"{% if request.url.path == '/audit' %} aria-current="page"{% endif %}>
+          <svg class="app-nav-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="6" y="4" width="12" height="16" rx="2"/>
+            <path d="M8 8h8M8 11h8M8 14h6"/>
+          </svg>
+          <span>Audit</span>
+        </a>
+        {% endif %}
+      </nav>
+
+      <div class="app-sidebar-footer">
+        <span class="text-body-secondary small">{{ app_name }} · v{{ version }}</span>
       </div>
-      {% if user %}
-      <div class="d-flex align-items-center gap-2">
-        <span class="text-body-secondary small">Signed in as <strong>{{ user.username }}</strong></span>
+    </div>
+  </aside>
+
+  <div class="app-workspace">
+    <header class="app-topbar">
+      <div class="d-flex d-lg-none align-items-center gap-2">
+        <button class="btn btn-outline-secondary app-nav-toggle" type="button"
+                data-bs-toggle="offcanvas" data-bs-target="#app-sidebar"
+                aria-controls="app-sidebar" aria-label="Open navigation">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <path d="M4 5h16M4 12h16M4 19h16"/>
+          </svg>
+        </button>
+        <a class="fw-semibold text-decoration-none" href="/">{{ app_name }}</a>
+      </div>
+      <div class="d-flex align-items-center gap-2 ms-auto">
+        <span class="text-body-secondary small d-none d-md-block">Signed in as <strong>{{ user.username }}</strong></span>
         <a class="btn btn-sm btn-outline-secondary" href="/profile">Profile</a>
         <form method="post" action="/logout" class="m-0">
           <input type="hidden" name="_csrf" value="{{ csrf_token }}">
           <button type="submit" class="btn btn-sm btn-outline-danger">Log out</button>
         </form>
       </div>
-      {% endif %}
-    </div>
-  </nav>
-  <main class="container-xl py-4">
-    {% block content %}{% endblock %}
-  </main>
+    </header>
+    <main class="{% block main_layout %}app-content{% endblock %}">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  {% endblock %}
   <script src="{{ url_for('static', path='vendor/bootstrap/bootstrap.bundle.min.js') }}"></script>
   {% block scripts %}{% endblock %}
 </body>

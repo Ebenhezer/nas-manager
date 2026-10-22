@@ -1,26 +1,66 @@
 {% extends "base.html" %}
 {% block title %}Log in · {{ app_name }}{% endblock %}
-{% block content %}
-<div class="mx-auto" style="max-width: 26rem">
-  <h1 class="h3 mb-4">Log in</h1>
-  {% if error %}<div class="alert alert-danger" role="alert">{{ error }}</div>{% endif %}
-  <form method="post" action="/login" class="card card-body">
-    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-    <div class="mb-3">
-      <label class="form-label" for="username">Username</label>
-      <input class="form-control" id="username" name="username" autocomplete="username"
-             autocapitalize="none" spellcheck="false" required autofocus>
+{% block body_class %}login-page{% endblock %}
+{% block layout %}
+<main class="login-main">
+  <div class="login-card">
+    <div class="text-center mb-4">
+      <span class="login-brand" aria-hidden="true">
+        <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24" fill="currentColor">
+          <circle cx="8" cy="8" r="3"/>
+          <circle cx="16" cy="8" r="3"/>
+          <circle cx="8" cy="16" r="3"/>
+          <circle cx="16" cy="16" r="3"/>
+        </svg>
+      </span>
+      <h1 class="h3 mb-1 fw-semibold">{{ app_name }}</h1>
+      <p class="text-body-secondary small mb-0">Sign in to continue</p>
     </div>
-    <div class="mb-3">
-      <label class="form-label" for="password">Password</label>
-      <input class="form-control" type="password" id="password" name="password"
-             autocomplete="current-password" required>
+
+    {% if error %}
+    <div class="alert alert-danger d-flex align-items-center gap-2 mb-3" role="alert">
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M12 4l-5 7l10 0l-5-7z"/>
+      </svg>
+      <div class="flex-grow-1">{{ error }}</div>
     </div>
-    <button type="submit" class="btn btn-primary">Log in</button>
-  </form>
-  <p class="text-body-secondary small mt-3 mb-0">
-    On a fresh install, create the administrator with
-    <code>python -m app.cli bootstrap-admin</code> on the server.
-  </p>
-</div>
+    {% endif %}
+
+    <form method="post" action="/login" class="card card-body shadow-sm p-4 rounded-4 border-0">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <div class="mb-3">
+        <label class="form-label" for="username">Username</label>
+        <div class="input-group input-group-lg">
+          <span class="input-group-text" aria-hidden="true">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="7" r="4.2"/>
+              <path d="M12 11v5M8 21h8"/>
+            </svg>
+          </span>
+          <input class="form-control" id="username" name="username" autocomplete="username"
+                 autocapitalize="none" autocorrect="off" spellcheck="false" required autofocus>
+        </div>
+      </div>
+      <div class="mb-3">
+        <label class="form-label" for="password">Password</label>
+        <div class="input-group input-group-lg">
+          <span class="input-group-text" aria-hidden="true">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M7 4a5 5 0 0 1 10 0M6 9h12v9h-12z"/>
+              <circle cx="12" cy="13.5" r="1.6" fill="currentColor"/>
+            </svg>
+          </span>
+          <input class="form-control" type="password" id="password" name="password"
+                 autocomplete="current-password" autocapitalize="none" autocorrect="off" required>
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary btn-lg w-100">Log in</button>
+    </form>
+
+    <p class="text-body-secondary small text-center mt-3 mb-0">
+      On a fresh install, create the administrator with
+      <code class="user-select-all">python -m app.cli bootstrap-admin</code> on the server.
+    </p>
+  </div>
+</main>
 {% endblock %}
