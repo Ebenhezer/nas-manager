@@ -64,6 +64,7 @@ Use `deploy/nas-manager.env.example` (not the development `.env.example`) for th
   - For a dev/test setup that writes directly, point `NAS_SAMBA_CONFIG_PATH` at a writable file and `NAS_SAMBA_BACKUP_DIR` at a writable backup directory (default `<DATA_DIR>/samba-backups`).
   - Samba must be installed on the host for validation (`testparm`). `apt install samba` provides it.
 - **Operators and Files/Samba.** By default only admin (or custom roles with `files:*`/`samba:*`) can open the Files and Samba pages. To let operators *view* them read-only, enable the **Settings → "Allow operators to view the Files and Samba pages"** toggle (stored per-installation; writes are never granted by it).
+- **Public upload folder (Phase 4).** The drop folder lives at `NAS_PUBLIC_UPLOAD_DIR` (default `<DATA_DIR>/uploads`, auto-created and owned by the service user; chown it there if you set a custom path). `NAS_PUBLIC_UPLOAD_MAX_FILE_BYTES` caps each file (default 1 GiB) and `NAS_PUBLIC_UPLOAD_DEFAULT_QUOTA_BYTES` sets the per-uploader quota (default 1 GiB). Public uploads are on by default; the **Settings → "Accept public uploads"** toggle and `NAS_PUBLIC_UPLOAD_ENABLED` both disable them (403). Administer quotas and cleanup on the **Uploads** page (needs `uploads:read`/`uploads:write`; the built-in operator role gets read-only). If the folder is exposed publicly, terminate TLS in front and consider rate-limiting `/public/upload` at your reverse proxy.
 
 Verify:
 

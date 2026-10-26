@@ -92,6 +92,16 @@
           <span>Samba</span>
         </a>
         {% endif %}
+        {% if can('uploads:read') %}
+        <a class="app-nav-link{% if request.url.path == '/uploads' %} active{% endif %}" href="/uploads"{% if request.url.path == '/uploads' %} aria-current="page"{% endif %}>
+          <svg class="app-nav-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M6 4h12v3h-12zM5 12h14v3h-14z"/>
+            <circle cx="9" cy="9" r="1.4" fill="currentColor"/>
+            <circle cx="15" cy="17.5" r="1.4" fill="currentColor"/>
+          </svg>
+          <span>Uploads</span>
+        </a>
+        {% endif %}
         {% if can('settings:read') %}
         <a class="app-nav-link{% if request.url.path == '/settings' %} active{% endif %}" href="/settings"{% if request.url.path == '/settings' %} aria-current="page"{% endif %}>
           <svg class="app-nav-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

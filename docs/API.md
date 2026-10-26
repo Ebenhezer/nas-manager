@@ -18,9 +18,9 @@ Base path: `/api/v1`. All responses are JSON. Interactive docs (`/api/docs`) are
 }
 ```
 
-Codes in use: `http_error` (404, 405, ...), `validation_error` (422), `conflict` (409), `not_found` (404), `bad_request` (400), `unauthorized` (401), `forbidden` (403), `too_many_requests` (429), `csrf_failure` (403), `internal_error` (500).
+Codes in use: `http_error` (404, 405, ...), `validation_error` (422), `conflict` (409), `not_found` (404), `bad_request` (400), `unauthorized` (401), `forbidden` (403), `too_many_requests` (429), `csrf_failure` (403), `quota_exceeded` (413), `internal_error` (500).
 
-- **Authentication**: except `GET /health` and the static assets, every endpoint requires a session cookie (`nas_session`, `HttpOnly`) obtained from `POST /auth/login` (JSON) or the `/login` form. Anonymous calls return `401`; an authenticated caller without the required permission returns `403`.
+- **Authentication**: except `GET /health`, the public upload endpoints, the `/public/upload` page and the static assets, every endpoint requires a session cookie (`nas_session`, `HttpOnly`) obtained from `POST /auth/login` (JSON) or the `/login` form. Anonymous calls return `401`; an authenticated caller without the required permission returns `403`.
 - **CSRF**: state-changing requests that carry browser cookies must echo the `nas_csrf` cookie value via the `X-CSRF-Token` header (or the `_csrf` form field). Authenticated requests must echo the token bound to the session. A cookie-less client (e.g., a script) is not blocked.
 - Role and group fields use summary objects; `roles`/`groups` are returned with their nested summaries.
 
@@ -160,9 +160,51 @@ Share changes and applies are audited (`samba.share.created/updated/deleted`, `s
 
 ## Settings (`settings:read` / `settings:write`)
 
-- `GET /settings` → `{"operator_view_files_samba": bool}`.
-- `PUT /settings` — body `{"operator_view_files_samba": bool}`. When enabled, users holding the `operator` role may **view** the Files and Samba pages (read-only); writes are never granted by this switch. Default is off. Changes are audited (`settings.updated`).
+- `GET /settings` → `{"operator_view_files_samba": bool, "public_upload_enabled": bool}`.
+- `PUT /settings` — partial update; either or both of `{"operator_view_files_samba": bool}`, `{"public_upload_enabled": bool}`. When `operator_view_files_samba` is enabled, users holding the `operator` role may **view** the Files and Samba pages (read-only); writes are never granted by this switch. `public_upload_enabled` overrides `NAS_PUBLIC_UPLOAD_ENABLED` once flipped: when false the public upload endpoints return 403 (existing files are kept). Defaults: off / the config value. Changes are audited (`settings.updated`, `public_upload.toggle_changed`).
+
+## Public upload folder
+
+The drop folder is **upload-only**: there is no public listing, download or search. Uploads are counted per uploader — `user:<username>` when the request carries a valid session, otherwise `ip:<client address>` — against that uploader's quota, enforced atomically (a rejected upload consumes nothing and is audited as `public_upload.rejected`).
+
+### Public (`GET /public/uploads`, `POST /public/uploads`)
+
+- `GET /public/uploads` → upload policy (no file data):
+
+```json
+{"enabled": true, "max_file_bytes": 1073741824, "filename_max_length": 255}
+```
+
+- `POST /public/uploads` (multipart `file`) → **201** with the stored metadata:
+
+```json
+{"id": 3, "uploader_key": "ip:203.0.113.9", "filename": "report (1).pdf", "size_bytes": 2048, "created_at": "2026-10-22T12:00:00"}
+```
+
+Colliding names are auto-uniquified (`report (1).pdf`); nothing is ever overwritten and the response reports the final name. Errors: `400` (name/cap), `403` (disabled), `413 quota_exceeded` (per-uploader quota exhausted). Cookie-less clients need no CSRF token; browsers must echo the `nas_csrf` cookie.
+
+### Admin (`uploads:read` / `uploads:write`)
+
+- `GET /public/uploads/status?limit=100&offset=0` → folder policy plus per-uploader usage:
+
+```json
+{
+  "enabled": true, "dir": "/var/lib/nas-manager/uploads",
+  "max_file_bytes": 1073741824, "default_quota_bytes": 1073741824,
+  "total_uploaders": 1, "total_files": 2, "total_used_bytes": 150,
+  "uploaders": [{"uploader_key": "ip:203.0.113.9", "quota_bytes": 1073741824,
+                 "used_bytes": 150, "file_count": 2, "over_quota": false}],
+  "limit": 100, "offset": 0
+}
+```
+
+- `GET /public/uploads/files?uploader_key=<key>&limit=100&offset=0` → `{"files": [{"id", "uploader_key", "filename", "size_bytes", "ip_address", "created_at"}], "total", "limit", "offset"}`, newest first.
+- `PATCH /public/uploads/quotas/{uploader_key}` — body `{"quota_bytes": n}`. Returns the updated `UploaderSummary` (same shape as above). Lowering below current usage flags `over_quota` and blocks new uploads without touching existing files. Audited (`public_upload.quota_changed`).
+- `DELETE /public/uploads/files/{id}` → 204. Removes the stored file and decrements usage. Audited (`public_upload.file_deleted`).
+- `POST /public/uploads/cleanup` — body `{}` or `{"older_than_days": 30}`. Removes stale `.nas-upload-*.part` temp files, optionally purges tracked files older than N days (rows + disk, audited), then reconciles every uploader's usage from the remaining records. Returns `{"removed_temp_files", "removed_files", "removed_bytes", "reconciled_uploaders", "message"}`. Audited (`public_upload.cleanup`).
+
+All upload mutations are audited under category `public_upload` (`public_upload.uploaded`, `public_upload.rejected`, `public_upload.quota_changed`, `public_upload.file_deleted`, `public_upload.cleanup`, `public_upload.toggle_changed`).
 
 ## Planned
 
-Upload quotas (4), tokens, resumable transfers and sync cursors (6). Each phase will extend this document.
+API tokens, resumable transfers and sync cursors (6). Each phase will extend this document.

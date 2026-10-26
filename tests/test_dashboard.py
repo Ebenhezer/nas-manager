@@ -40,6 +40,15 @@ def test_login_page_sets_csrf_cookie(client: TestClient) -> None:
     assert "nas_csrf" in response.cookies
 
 
+def test_public_upload_page_is_public(client: TestClient) -> None:
+    response = client.get("/public/upload")
+    assert response.status_code == 200
+    assert "public_upload.js" in response.text
+    assert "Public upload" in response.text
+    # Upload-only: no file list is ever rendered or fetched.
+    assert "files?uploader_key" not in response.text
+
+
 def test_first_login_page_embeds_matching_csrf_token(client: TestClient) -> None:
     """Regression: form token and Set-Cookie must match on the very first load."""
     page = client.get("/login")
@@ -49,7 +58,16 @@ def test_first_login_page_embeds_matching_csrf_token(client: TestClient) -> None
 
 
 def test_management_pages_require_authentication(client: TestClient) -> None:
-    for path in ["/users", "/groups", "/audit", "/profile", "/files", "/samba", "/settings"]:
+    for path in [
+        "/users",
+        "/groups",
+        "/audit",
+        "/profile",
+        "/files",
+        "/samba",
+        "/settings",
+        "/uploads",
+    ]:
         response = client.get(path, follow_redirects=False)
         assert response.status_code == 302, path
         assert response.headers["location"] == "/login", path
@@ -65,9 +83,9 @@ def test_dashboard_has_no_inline_script_or_style(page: TestClient) -> None:
     assert inline_scripts == []
 
 
-@pytest.mark.parametrize("path", ["/files", "/samba", "/settings"])
+@pytest.mark.parametrize("path", ["/files", "/samba", "/settings", "/uploads", "/public/upload"])
 def test_phase3_pages_have_no_inline_script_or_style(page: TestClient, path: str) -> None:
-    """Phase 3 pages must stay within the same CSP (no inline code)."""
+    """Phase 3/4 pages must stay within the same CSP (no inline code)."""
     html = page.get(path).text.lower()
     assert "<style" not in html
     assert " style=" not in html
@@ -91,6 +109,8 @@ def test_phase3_pages_have_no_inline_script_or_style(page: TestClient, path: str
         "/static/js/files.js",
         "/static/js/samba.js",
         "/static/js/settings.js",
+        "/static/js/uploads.js",
+        "/static/js/public_upload.js",
         "/static/vendor/bootstrap/bootstrap.min.css",
         "/static/vendor/bootstrap/bootstrap.bundle.min.js",
     ],

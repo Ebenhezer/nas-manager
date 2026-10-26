@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Public uploads · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
+  <h1 class="h3 mb-0">Public uploads</h1>
+  {% if can('uploads:write') %}
+  <button type="button" id="cleanup-btn" class="btn btn-outline-secondary">Clean up temp files</button>
+  {% endif %}
+</div>
+<div id="error-banner" class="alert alert-danger d-none" role="alert"></div>
+<div id="status-card" class="mb-4"></div>
+
+{% if can('uploads:write') %}
+<div class="card mb-4">
+  <div class="card-header">Purge files older than</div>
+  <div class="card-body">
+    <form id="purge-form" class="row g-3">
+      <div class="col-auto">
+        <input type="number" class="form-control" id="purge-days" min="1" max="3650" required
+               placeholder="days">
+      </div>
+      <div class="col-auto">
+        <button type="submit" class="btn btn-danger">Purge</button>
+      </div>
+    </form>
+    <div class="form-text">
+      Permanently deletes tracked files older than the given number of days and
+      reconciles every uploader's usage. Deletions are audited.
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="card mb-4">
+  <div class="card-header">Uploaders</div>
+  <div class="table-responsive">
+    <table class="table table-striped align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Uploader</th>
+          <th>Quota</th>
+          <th>Used</th>
+          <th>Files</th>
+          <th>Status</th>
+          {% if can('uploads:write') %}<th class="text-end">Actions</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody id="uploaders-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>Files</span>
+    <select id="file-filter" class="form-select form-select-sm w-auto" aria-label="Filter files by uploader">
+      <option value="">All uploaders</option>
+    </select>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-striped align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Uploader</th>
+          <th>Filename</th>
+          <th>Size</th>
+          <th>IP</th>
+          <th>Uploaded</th>
+          {% if can('uploads:write') %}<th class="text-end">Actions</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody id="files-body"></tbody>
+    </table>
+  </div>
+  <div class="card-footer small">
+    <span id="files-total"></span>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script type="module" src="{{ url_for('static', path='js/uploads.js') }}"></script>
+{% endblock %}

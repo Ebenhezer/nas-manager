@@ -9,7 +9,7 @@ from typing import Literal, Self
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_GIB = 1024 ** 3
+_GIB = 1024**3
 
 
 class Settings(BaseSettings):

@@ -9,7 +9,7 @@ Status legend: **Done** (implemented and verified), **Next**, **Planned**.
 | 1 | Foundation, database, dashboard, configuration, logging, systemd deployment | **Done** |
 | 2 | Authentication, users, groups, permissions, audit events | **Done** |
 | 3 | File manager and Samba integration | **Done** |
-| 4 | Public upload folder and quotas | **Next** |
+| 4 | Public upload folder and quotas | **Done** |
 | 5 | Disk discovery, storage and RAID management (+ privileged helper) | Planned |
 | 6 | REST API, API tokens, mobile-client support | Planned |
 | 7 | Cloud and remote synchronization | Planned |
@@ -119,6 +119,38 @@ Delivered:
 - The web UI (Files/Samba/Settings pages) was verified through TestClient only — no real browser run.
 - No real Samba installation was exercised: `testparm` is mocked in tests and apply writes to disposable temp paths. On a target host, confirm the rendered config is accepted by the installed `testparm` and that `smbd` picks up the changes after the operator applies them (until the Phase 5 helper provides the reload).
 
+## Phase 4: completed
+
+Delivered:
+
+- **Public upload folder** (`app/services/public_uploads.py`). A dedicated drop folder (config `NAS_PUBLIC_UPLOAD_DIR`, default `<data_dir>/uploads`) that unauthenticated clients can write to. It is strictly *upload-only*: there is no public listing, download or search endpoint. Files land in per-uploader subdirectories named `sha256(uploader_key)[:24]` (collision-safe, no key leakage); uploads stream to a `.nas-upload-*.part` temp file and are atomically renamed, colliding names are auto-uniquified (`file (1).ext`) so nothing is ever overwritten, and filenames are sanitized with the same rules as the file manager (no separators, no `.`/`..`, no null bytes, ≤ 255 bytes).
+- **Strict per-uploader quotas, atomic against concurrent uploads.** Every upload counts against `user:<username>` (when the request carries a valid session) or `ip:<client address>` (anonymous). The quota check and the reservation happen inside the same database transaction that records the accepted file: the uploader's `public_upload_quotas` row is locked (`UPDATE`), re-read under the lock, and `used_bytes` is incremented in the same commit as the file's row — on SQLite (WAL single writer) and PostgreSQL (row lock) a concurrent upload cannot interleave past the check. Rejections return `413 quota_exceeded` and roll the reservation back (no quota consumed, no temp file left), and are recorded as `public_upload.rejected` failure audit events.
+- **Migration `0004`** (`public_upload_quotas`, `public_upload_files`) and two new permission tokens `uploads:read` / `uploads:write`. The migration grants admin read+write and operator read-only; custom roles may be granted the tokens through the roles API.
+- **API** — public: `GET /public/uploads` (policy: enabled + max file size, no file data) and `POST /public/uploads` (multipart upload, no auth). Admin (`uploads:read`/`uploads:write`): `GET /public/uploads/status` (per-uploader usage, over-quota flags), `GET /public/uploads/files` (records, filterable per uploader), `PATCH /public/uploads/quotas/{key}` (set quota; lowering below use blocks new uploads without touching files), `DELETE /public/uploads/files/{id}` (single file; decrements usage; audited), `POST /public/uploads/cleanup` (stale temp files, optional purge of files older than N days, then reconciles every usage ledger from the remaining file records). All mutations audited under category `public_upload`.
+- **Runtime master switch.** The Settings page/API gained `public_upload_enabled`, which overrides `NAS_PUBLIC_UPLOAD_ENABLED` once flipped; disabled uploads return 403 and the public page shows the state.
+- **Web UI**: `/public/upload` — an anonymous drag-and-drop/click page (upload-only, no listing) that stays fully CSP-compatible; `/uploads` — the admin page with folder status, per-uploader quota editing with a usage progress bar, over-quota flags, file records with per-file delete, temp cleanup and age-based purge. Nav link is permission-gated.
+
+### Verification (executed in this workspace)
+
+| Check | Result |
+|-------|--------|
+| `pytest` | 235 passed (230 pre-existing + 23 new/moved in this phase) |
+| `ruff check` / `ruff format --check` | clean |
+| `mypy` (strict, `app` + `tests`) | no issues |
+| `alembic upgrade head` on a fresh directory | applies `0001`–`0004`; drift test finds no differences; downgrade drops the new tables and revokes the granted tokens |
+| Public uploads | anonymous round-trip (201), user/IP keying, sanitization + traversal rejection, auto-uniquified colliding names, `GET` policy without auth, no anonymous status/listing (401) |
+| Quotas | over-quota upload → 413, usage unchanged and no file/temp residue, failure audit written; exact-fit upload succeeds; admin lowering quota below use flags `over_quota` and blocks new uploads |
+| Caps | per-file cap enforced mid-stream (400) with no temp leftover |
+| Admin | status totals + per-uploader summaries; files page + per-uploader filter; single-file delete removes disk + decrements ledger; cleanup removes temps, purges old files, reconciles usage (counts returned and audited) |
+| Permissions | anonymous → 401 on all admin routes; operator read-only (status/files 200, quota/delete/cleanup 403); admin full access |
+| Settings toggle | default on; PUT off → 403 for uploads and policy reports disabled; audited (`public_upload.toggle_changed`) |
+
+### Not verified
+
+- The public upload page (`/public/upload`) and the Uploads admin page were exercised via TestClient and curl only — no real browser run (drag-and-drop, progress bar styling, purge form).
+- The concurrency guarantee is enforced by the row-lock design and documented, but a true multi-process race was not hammered in CI; the single-writer SQLite path is covered by the transaction tests.
+- Anonymous quotas are keyed by client IP, which proxies/NAT can coalesce and botnets can fragment; API-token keying arrives with Phase 6.
+
 ## Design decisions
 
 1. **No CDN.** Bootstrap 5.3.8 is vendored under `app/web/static/vendor/bootstrap/` so a NAS works offline and the CSP can stay `default-src 'self'`.
@@ -136,6 +168,9 @@ Delivered:
 13. **The file manager is jailed to configured roots.** Every relative path is resolved and re-checked with `is_relative_to`; uploads land via a temp file + atomic rename so quota/cap checks happen before the final name exists. File roots are config (`NAS_FILE_ROOTS`), defaulting to `<data_dir>/files`.
 14. **Samba config is merged, not rewritten.** Only the range between the managed markers is touched; everything else is preserved verbatim, the result is validated with `testparm -s` against a temp copy, the previous file is backed up, and the write is atomic. Reloading `smbd` is a privileged step deferred to the Phase 5 helper; status reports `reload_required` rather than pretending it happened.
 15. **Least-privilege default with a runtime relaxation.** `operator`/`viewer` cannot open Files/Samba. An admin may flip `operator_view_files_samba` in Settings to grant operators read-only access; writes are never granted by the toggle.
+16. **The public drop folder is upload-only by design.** There is no public listing/download/search; a lightweight public policy endpoint exposes only whether uploads are enabled and the per-file cap. Quotas are keyed per uploader (`user:` when a session is present, `ip:` otherwise) and the quota check/reservation is one database transaction with the file's record (row lock → re-read → check → commit), so concurrent uploads cannot bypass a quota. Anonymous IP keying is a Phase 4 pragmatic default; token-keyed quotas arrive with Phase 6.
+17. **The drop folder never overwrites.** Colliding names are auto-uniquified (`photo (1).jpg`), the response returns the final stored name, and the byte-length-safe uniquifier keeps names within the 255-byte filesystem limit even after the counter suffix is appended.
+18. **Storage is the ledger, cleanup reconciles it.** `public_upload_files` records every accepted file; `public_upload_quotas.used_bytes` is incremented/decremented in the same transactions that insert/delete file rows. The admin cleanup endpoint removes stale temp files, optionally purges files older than N days (rows + disk, audited) and then recomputes every quota row from the remaining records, so out-of-band drift heals on demand.
 
 ## Known limitations
 
@@ -148,7 +183,8 @@ Delivered:
 - No background job framework yet (needed from Phase 7 onward).
 - `smbd` reload is not performed by Phase 3: the web process is unprivileged and the privileged helper arrives in Phase 5. The app writes and validates the config and reports `reload_required`.
 - The file manager has no per-share or per-user folder permissions yet (that lands with quotas in Phase 4 and disks in Phase 5); access is governed by the `files:*`/`samba:*` permissions and the operator toggle.
+- Anonymous public-upload quotas are keyed by client IP (`ip:`) — NAT/proxies coalesce addresses and botnets can fragment them; per-token quotas arrive with the Phase 6 API tokens. Uploads are also served on whatever interface the app binds; a public deployment must put the drop page behind TLS and (optionally) a rate limit.
 
-## Next: Phase 4 (outline)
+## Next: Phase 5 (outline)
 
-Public upload folder and quotas: a dedicated upload-only drop folder with strict per-user quotas enforced atomically (upload and quota checks in one transaction), upload-only default permissions (no listing/browsing), and admin controls for quota limits and cleanup.
+Disk discovery, storage and RAID management through the privileged helper: read-only discovery of physical disks, volumes, filesystems and RAID arrays; a fixed allowlist of validated operations (mount/unmount with explicit confirmation, scrub, SMART status); the helper also takes over the deferred `smbd` reload from Phase 3/4.

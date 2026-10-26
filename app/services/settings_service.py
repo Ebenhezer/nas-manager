@@ -6,6 +6,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings
 from app.models import User
 from app.models.app_setting import AppSetting
 from app.services import audit
@@ -17,6 +18,11 @@ INSTANCE_ID_KEY = "instance_id"
 # File manager and Samba pages read-only (files:read + samba:read). Writes
 # always require explicit grants and are unaffected.
 OPERATOR_VIEW_FILES_SAMBA_KEY = "operator_view_files_samba"
+
+# Master switch for the public upload folder. When unset the config value
+# applies (NAS_PUBLIC_UPLOAD_ENABLED); once an admin touches it in Settings
+# this runtime value wins until it is flipped again. Stored as "1" / "0".
+PUBLIC_UPLOAD_ENABLED_KEY = "public_upload_enabled"
 
 
 def get_setting(session: Session, key: str) -> str | None:
@@ -68,6 +74,45 @@ def set_operator_files_samba_view(
         target_type="setting",
         target_id=OPERATOR_VIEW_FILES_SAMBA_KEY,
         details={"operator_view_files_samba": enabled},
+        ip_address=ip_address,
+        user_agent=user_agent,
+        request_id=request_id,
+        commit=False,
+    )
+    session.commit()
+
+
+def public_uploads_enabled(session: Session, settings: Settings) -> bool:
+    """Whether the public drop folder accepts uploads.
+
+    The Settings runtime override wins once an admin has set it; otherwise the
+    ``NAS_PUBLIC_UPLOAD_ENABLED`` config default applies.
+    """
+    value = get_setting(session, PUBLIC_UPLOAD_ENABLED_KEY)
+    if value is None:
+        return settings.public_upload_enabled
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def set_public_uploads_enabled(
+    session: Session,
+    *,
+    enabled: bool,
+    actor: User,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
+    request_id: str | None = None,
+) -> None:
+    """Flip the runtime switch and record the audit event (admin-only in the API)."""
+    set_bool_setting(session, PUBLIC_UPLOAD_ENABLED_KEY, enabled)
+    audit.record_audit_event(
+        session,
+        event=audit.PUBLIC_UPLOAD_TOGGLE_CHANGED,
+        category=audit.CATEGORY_PUBLIC_UPLOAD,
+        actor=actor,
+        target_type="setting",
+        target_id=PUBLIC_UPLOAD_ENABLED_KEY,
+        details={"public_upload_enabled": enabled},
         ip_address=ip_address,
         user_agent=user_agent,
         request_id=request_id,

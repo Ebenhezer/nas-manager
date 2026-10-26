@@ -209,6 +209,24 @@ def settings_page(
     return templates.TemplateResponse(request, "settings.html", _page_context(request, current))
 
 
+@router.get("/public/upload", response_class=HTMLResponse)
+def public_upload_page(request: Request) -> Response:
+    """The public drop page: upload-only, no authentication, no listing."""
+    return templates.TemplateResponse(request, "public_upload.html", _page_context(request, None))
+
+
+@router.get("/uploads", response_class=HTMLResponse)
+def uploads_page(
+    request: Request, current: CurrentUser | None = Depends(resolve_web_user)
+) -> Response:
+    redirect = _protected(current)
+    if redirect is not None:
+        return redirect
+    if current is None or "uploads:read" not in current.permissions:
+        raise UnauthorizedError("Missing required permission: uploads:read")
+    return templates.TemplateResponse(request, "uploads.html", _page_context(request, current))
+
+
 @router.get("/profile", response_class=HTMLResponse)
 def profile_page(
     request: Request, current: CurrentUser | None = Depends(resolve_web_user)

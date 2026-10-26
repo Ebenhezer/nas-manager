@@ -32,7 +32,9 @@ ALL_PERMISSIONS: frozenset[str] = frozenset(PERMISSIONS)
 
 ROLE_DESCRIPTIONS: dict[str, str] = {
     "admin": "Full access to every managed resource, including user and group management.",
-    "operator": "Read access to users, groups, roles, audit log, system, settings and public upload usage.",
+    "operator": (
+        "Read access to users, groups, roles, audit log, system, settings and public upload usage."
+    ),
     "viewer": "Read-only access to the dashboard.",
 }
 

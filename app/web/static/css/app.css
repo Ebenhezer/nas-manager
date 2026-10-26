@@ -40,6 +40,27 @@ body.login-page {
   max-width: 24rem;
 }
 
+/* ---------- Public upload drop zone ---------- */
+.drop-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 2rem 1rem;
+  border: var(--bs-border-width) dashed var(--bs-border-color);
+  border-radius: 0.75rem;
+  background-color: var(--bs-secondary-bg);
+  cursor: pointer;
+  color: var(--bs-body-color);
+}
+
+.drop-zone:hover,
+.drop-zone:focus-visible {
+  border-color: var(--bs-primary);
+  box-shadow: 0 0 0 0.25rem var(--bs-focus-ring-color);
+}
+
 .login-brand {
   width: 60px;
   height: 60px;

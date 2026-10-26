@@ -23,6 +23,24 @@
     </div>
   </div>
 </div>
+<div class="card mt-3">
+  <div class="card-header">Public upload folder</div>
+  <div class="card-body">
+    <div class="form-check form-switch">
+      <input class="form-check-input" type="checkbox" id="public-upload-enabled"
+             {% if not can('settings:write') %}disabled{% endif %}>
+      <label class="form-check-label" for="public-upload-enabled">
+        Accept public uploads to the drop folder
+      </label>
+      <div class="form-text">
+        When on, anyone can upload files to <code>/public/upload</code>
+        (upload-only — there is no public listing) subject to per-uploader quotas.
+        This runtime switch overrides <code>NAS_PUBLIC_UPLOAD_ENABLED</code> once flipped;
+        quotas and cleanup are managed on the <a href="/uploads">Uploads</a> page.
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}
 {% block scripts %}
 <script type="module" src="{{ url_for('static', path='js/settings.js') }}"></script>

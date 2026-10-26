@@ -40,10 +40,10 @@ Rules: routes validate and delegate; services hold logic and talk to the OS or d
 | `app/core/permissions.py` | Permission-token registry and default role grants |
 | `app/db/` | Naming conventions, engine/session factory, migration helpers, `get_db` |
 | `app/api/v1/deps.py` | `CurrentUser`, `get_current_user`, `require_permission(...)` |
-| `app/api/v1/` | `auth`, `users`, `groups`, `roles`, `audit`, `health`, `system`, `files`, `samba`, `settings` |
-| `app/services/` | `passwords`, `auth_service`, `users_service`, `groups_service`, `roles_service`, `security`, `audit`, `throttle`, `bootstrap_service`, `health`, `monitoring`, `settings_service`, `files`, `samba` |
-| `app/models/` | `user`, `group`, `role`, `session`, `audit_event`, `app_setting`, `samba_share` |
-| `app/web/` | Jinja2 templates + modular JS (login, dashboard, users, groups, audit, profile, files, samba, settings) |
+| `app/api/v1/` | `auth`, `users`, `groups`, `roles`, `audit`, `health`, `system`, `files`, `samba`, `settings`, `public_uploads` |
+| `app/services/` | `passwords`, `auth_service`, `users_service`, `groups_service`, `roles_service`, `security`, `audit`, `throttle`, `bootstrap_service`, `health`, `monitoring`, `settings_service`, `files`, `samba`, `public_uploads` |
+| `app/models/` | `user`, `group`, `role`, `session`, `audit_event`, `app_setting`, `samba_share`, `public_upload` |
+| `app/web/` | Jinja2 templates + modular JS (login, dashboard, users, groups, audit, profile, files, samba, settings, uploads, public_upload) |
 
 ## Authentication and authorization
 
@@ -72,12 +72,13 @@ systemd: nas-manager-helper.service   (Phase 5, planned)
 
 The web process never executes arbitrary commands and never runs as root. The helper does not exist yet; any feature needing privileges must wait for it.
 
-## File manager and Samba (Phase 3)
+## File manager, Samba and public uploads (Phase 3/4)
 
 - **File manager.** `app/services/files.py` is the only module that touches the managed filesystem. It resolves every requested path against one of the configured roots (`NAS_FILE_ROOTS`, default `<data_dir>/files`) with `Path.resolve()` + `is_relative_to` and refuses absolute paths, `..` traversal, null bytes and symlinks that resolve outside the root. Listing/search use `lstat` and `os.walk(followlinks=False)`; uploads stream to a `.nas-upload-*.part` temp file in the destination and are atomically renamed, so a partial upload never appears under the final name and the size cap cannot be bypassed. All mutations and downloads are audited.
 - **Samba.** `app/services/samba.py` renders the database's `samba_shares` into a managed section delimited by `# ==== NAS-MANAGER MANAGED BEGIN/END ====` markers, preserving every line outside it. Before writing it validates the result with `testparm -s` against a temporary copy (mocked in tests), backs up the previous config into `NAS_SAMBA_BACKUP_DIR` and writes atomically. The web process is unprivileged: reloading `smbd` is a privileged step deferred to the Phase 5 helper, so status reports `reload_required` and no privileged command is ever executed here.
-- **Runtime settings.** `app/services/settings_service.py` stores non-secret key/value switches in `app_settings` (e.g. `operator_view_files_samba`). `app/services/security.py::effective_permissions_for_user` consults that switch, so the API guards and the web pages pick it up without separate plumbing.
+- **Runtime settings.** `app/services/settings_service.py` stores non-secret key/value switches in `app_settings` (e.g. `operator_view_files_samba`, `public_upload_enabled`). `app/services/security.py::effective_permissions_for_user` consults that switch, so the API guards and the web pages pick it up without separate plumbing.
+- **Public upload folder.** `app/services/public_uploads.py` owns the drop folder (`NAS_PUBLIC_UPLOAD_DIR`, default `<data_dir>/uploads`) and is the only module that writes to it. It is upload-only (no public listing/download/search); a public policy endpoint exposes only the enabled flag and the per-file cap. Files land in per-uploader subdirectories named `sha256(uploader_key)[:24]`, stream to a temp file and are atomically renamed with auto-uniquified names (never overwrite; names stay ≤ 255 bytes even after the counter suffix). Usage is keyed `user:<name>` / `ip:<address>`. The quota check and reservation live in the same transaction as the file record: the uploader's `public_upload_quotas` row is locked with an `UPDATE`, re-read under the lock, and `used_bytes` incremented with the `public_upload_files` insert — serialising concurrent uploads on SQLite (WAL single writer) and PostgreSQL (row lock). Deletes and age-purging decrement/reconcile the ledger; cleanup removes stale temp files and reconciles every quota row from the remaining file records. Both `public_upload_*` tables and the `uploads:read`/`uploads:write` tokens come from migration `0004`.
 
 ## Planned additions
 
-Upload quotas (4), privileged helper + disks/RAID (5), tokens (6), sync engine and persistent job queue (7), gallery (8), streaming (9), alerting (10), backups (11), config export/import (12), audit/syslog (13).
+Privileged helper + disks/RAID (5), tokens (6), sync engine and persistent job queue (7), gallery (8), streaming (9), alerting (10), backups (11), config export/import (12), audit/syslog (13).
