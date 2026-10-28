@@ -45,6 +45,7 @@ class SambaStatus(BaseModel):
     managed_share_count: int
     backup_dir: str
     pending_changes: bool
+    helper_available: bool = False
     reload_required: bool
     message: str
 
@@ -53,4 +54,5 @@ class SambaApplyResult(BaseModel):
     config_path: str
     backup_path: str | None
     reload_required: bool
+    helper_available: bool = False
     message: str

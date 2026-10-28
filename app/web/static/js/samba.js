@@ -44,6 +44,7 @@ function renderStatus(status) {
     ["Managed shares", String(status.managed_share_count)],
     ["Backup directory", status.backup_dir],
     ["Pending changes", yesNo(status.pending_changes)],
+    ["Privileged helper", status.helper_available ? "available" : "not available"],
     ["Reload required", yesNo(status.reload_required)],
   ];
   for (const [term, definition] of rows) {

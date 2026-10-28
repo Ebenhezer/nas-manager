@@ -24,6 +24,8 @@ CATEGORY_SETTINGS = "settings"
 CATEGORY_FILE = "file"
 CATEGORY_SAMBA = "samba"
 CATEGORY_PUBLIC_UPLOAD = "public_upload"
+CATEGORY_DISK = "disk"
+CATEGORY_RAID = "raid"
 
 OUTCOME_SUCCESS = "success"
 OUTCOME_FAILURE = "failure"
@@ -84,6 +86,16 @@ PUBLIC_UPLOAD_QUOTA_CHANGED = "public_upload.quota_changed"
 PUBLIC_UPLOAD_FILE_DELETED = "public_upload.file_deleted"
 PUBLIC_UPLOAD_CLEANUP = "public_upload.cleanup"
 PUBLIC_UPLOAD_TOGGLE_CHANGED = "public_upload.toggle_changed"
+
+# disk events (Phase 5)
+DISK_MOUNTED = "disk.mounted"
+DISK_UNMOUNTED = "disk.unmounted"
+DISK_ACTION_FAILED = "disk.action_failed"
+DISK_HELPER_UNAVAILABLE = "disk.helper_unavailable"
+
+# raid events (Phase 5)
+RAID_SCRUB_STARTED = "raid.scrub_started"
+RAID_ACTION_FAILED = "raid.action_failed"
 
 
 def record_audit_event(

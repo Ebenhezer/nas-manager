@@ -197,6 +197,18 @@ def samba_page(
     return templates.TemplateResponse(request, "samba.html", _page_context(request, current))
 
 
+@router.get("/disks", response_class=HTMLResponse)
+def disks_page(
+    request: Request, current: CurrentUser | None = Depends(resolve_web_user)
+) -> Response:
+    redirect = _protected(current)
+    if redirect is not None:
+        return redirect
+    if current is None or "disks:read" not in current.permissions:
+        raise UnauthorizedError("Missing required permission: disks:read")
+    return templates.TemplateResponse(request, "disks.html", _page_context(request, current))
+
+
 @router.get("/settings", response_class=HTMLResponse)
 def settings_page(
     request: Request, current: CurrentUser | None = Depends(resolve_web_user)

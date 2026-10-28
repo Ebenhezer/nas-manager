@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}Disks &amp; storage · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
+  <h1 class="h3 mb-0">Disks &amp; storage</h1>
+  <span class="text-body-secondary small" id="helper-badge"></span>
+</div>
+<div id="error-banner" class="alert alert-danger d-none" role="alert"></div>
+
+<div class="card mb-4">
+  <div class="card-header">Physical disks</div>
+  <div class="table-responsive">
+    <table class="table table-striped align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Model</th>
+          <th>Size</th>
+          <th>Transport</th>
+          <th>Rotational</th>
+          <th>Mount points</th>
+          {% if can('disks:write') %}<th class="text-end">Actions</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody id="disks-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header">Mounted volumes</div>
+  <div class="table-responsive">
+    <table class="table table-striped align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Target</th>
+          <th>Source</th>
+          <th>Filesystem</th>
+          <th>Options</th>
+          <th>Used</th>
+          <th>Available</th>
+        </tr>
+      </thead>
+      <tbody id="volumes-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header">RAID arrays</div>
+  <div class="table-responsive">
+    <table class="table table-striped align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Array</th>
+          <th>Level</th>
+          <th>State</th>
+          <th>Size</th>
+          <th>Active / Total</th>
+          <th>Members</th>
+          <th>Sync</th>
+          {% if can('disks:write') %}<th class="text-end">Actions</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody id="raid-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="modal fade" id="confirm-modal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="confirm-modal-title">Confirm action</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div id="confirm-modal-plan" class="mb-2"></div>
+        <ul id="confirm-modal-warnings" class="small text-danger mb-0"></ul>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirm-modal-accept">Confirm</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="mount-modal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Mount volume</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label" for="mount-device">Device</label>
+          <input class="form-control" id="mount-device" readonly>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="mount-mountpoint">Mount point (absolute path)</label>
+          <input class="form-control" id="mount-mountpoint" placeholder="/mnt/storage" spellcheck="false">
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="mount-fstype">Filesystem</label>
+          <select class="form-select" id="mount-fstype">
+            <option value="ext4">ext4</option>
+            <option value="xfs">xfs</option>
+            <option value="btrfs">btrfs</option>
+            <option value="exfat">exfat</option>
+            <option value="vfat">vfat</option>
+            <option value="ntfs3">ntfs3</option>
+            <option value="iso9660">iso9660</option>
+          </select>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="mount-options">Mount options (comma separated)</label>
+          <input class="form-control" id="mount-options" value="defaults" spellcheck="false">
+        </div>
+        <div id="mount-error" class="alert alert-danger d-none" role="alert"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="mount-preview-btn">Preview steps</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script type="module" src="{{ url_for('static', path='js/disks.js') }}"></script>
+{% endblock %}

@@ -59,12 +59,40 @@ Use `deploy/nas-manager.env.example` (not the development `.env.example`) for th
 ### File manager and Samba (Phase 3)
 
 - **File manager roots.** Set `NAS_FILE_ROOTS` to a JSON list of absolute directories you want to manage, e.g. `NAS_FILE_ROOTS='["/mnt/storage"]'`. When unset the file manager uses `<DATA_DIR>/files`. The web process must be able to read/write those directories (chown them to `nas-manager` or the group it belongs to). `NAS_MAX_UPLOAD_BYTES` caps each upload (default 2 GiB).
-- **Samba.** The app manages shares in its database and renders them into `smb.conf`. The web process runs unprivileged and **cannot write `/etc/samba/smb.conf`** in the default setup, so `POST /samba/apply` will report a `configuration_error` until a privileged path exists:
-  - Phase 5 introduces an allowlisted helper that will write the config and reload `smbd`. Until then, an operator can apply the rendered config manually (copy it out of the app's status/`apply` flow, or run the service with a writable `NAS_SAMBA_CONFIG_PATH` in a development setup) and run `sudo smbcontrol all reload-config`.
-  - For a dev/test setup that writes directly, point `NAS_SAMBA_CONFIG_PATH` at a writable file and `NAS_SAMBA_BACKUP_DIR` at a writable backup directory (default `<DATA_DIR>/samba-backups`).
-  - Samba must be installed on the host for validation (`testparm`). `apt install samba` provides it.
+- **Samba.** The app manages shares in its database and renders them into `smb.conf`. The web process runs unprivileged and **cannot write `/etc/samba/smb.conf`** by itself. Deploy the Phase 5 helper (`nas-manager-helper.service`, below) and set `NAS_HELPER_ENABLED=true`: **Apply** then writes the validated config through the helper (re-validating with `testparm -s`, backing up, atomic write) and reloads `smbd`, and the Samba page shows `reload_required: false`.
+  - For a dev/test setup without the helper, point `NAS_SAMBA_CONFIG_PATH` at a writable file and `NAS_SAMBA_BACKUP_DIR` at a writable backup directory (default `<DATA_DIR>/samba-backups`); Apply then writes the config and reports `reload_required: true`. Samba must be installed on the host for validation (`testparm`; `apt install samba`).
 - **Operators and Files/Samba.** By default only admin (or custom roles with `files:*`/`samba:*`) can open the Files and Samba pages. To let operators *view* them read-only, enable the **Settings → "Allow operators to view the Files and Samba pages"** toggle (stored per-installation; writes are never granted by it).
 - **Public upload folder (Phase 4).** The drop folder lives at `NAS_PUBLIC_UPLOAD_DIR` (default `<DATA_DIR>/uploads`, auto-created and owned by the service user; chown it there if you set a custom path). `NAS_PUBLIC_UPLOAD_MAX_FILE_BYTES` caps each file (default 1 GiB) and `NAS_PUBLIC_UPLOAD_DEFAULT_QUOTA_BYTES` sets the per-uploader quota (default 1 GiB). Public uploads are on by default; the **Settings → "Accept public uploads"** toggle and `NAS_PUBLIC_UPLOAD_ENABLED` both disable them (403). Administer quotas and cleanup on the **Uploads** page (needs `uploads:read`/`uploads:write`; the built-in operator role gets read-only). If the folder is exposed publicly, terminate TLS in front and consider rate-limiting `/public/upload` at your reverse proxy.
+
+### Disks, storage and RAID (Phase 5, privileged helper)
+
+The web process stays unprivileged. A second root service performs discovery and the privileged actions:
+
+```bash
+# 1. Install the helper's requirements (same venv as the app).
+sudo apt install smartmontools mdadm mount util-linux
+
+# 2. Helper unit (runs `python -m app.helper` as root)
+sudo cp deploy/systemd/nas-manager-helper.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now nas-manager-helper
+
+# 3. Enable the web process to use it and authorise the service account.
+#    In /etc/nas-manager/nas-manager.env (web + helper share the file):
+#      NAS_HELPER_ENABLED=true
+#      NAS_HELPER_SOCKET=/run/nas-manager/helper.sock
+#      NAS_HELPER_ALLOWED_UIDS=<numeric uid of the nas-manager user>
+#      NAS_HELPER_SOCKET_GROUP=nas-manager
+sudo systemctl restart nas-manager nas-manager-helper
+journalctl -u nas-manager-helper -n 50 --no-pager
+```
+
+Then open **Disks** in the UI: physical disks, mounted volumes and RAID arrays render from the helper; the badge in the header shows `helper online`. Mount/unmount/scrub flows always show a **preview first** (the exact action, warnings and data-loss notes) and require an explicit confirmation — nothing is ever mounted, unmounted or scrubbed automatically.
+
+- The helper binds `/run/nas-manager/helper.sock` (`0660 root:<group>`) and accepts connections only from root or the UIDs in `NAS_HELPER_ALLOWED_UIDS` (the service user's UID; `SO_PEERCRED`-enforced) — no password/secret is shared over the wire.
+- Discovery (`lsblk`, `findmnt`, `/proc/mdstat`, `smartctl`) and actions (`mount`, `umount`, md `check` scrub, `smbcontrol all reload-config`) run in the helper with a fixed allowlist; the web process sends only validated parameter objects, never command lines.
+- With `NAS_HELPER_ENABLED=true`, **Samba Apply** now also writes `/etc/samba/smb.conf` (via the helper) and reloads `smbd`; the Samba page shows the helper state and `reload_required: false`.
+- **Test on a scratch disk only** (USB stick or a spare drive): format a test filesystem (`sudo mkfs.ext4 /dev/sdX`), then use the Disks page to mount it under `/mnt` and unmount it again. Never point the page at a disk holding data.
 
 Verify:
 

@@ -2,7 +2,7 @@
 
 Web application for managing an Ubuntu NAS: Samba shares, users and permissions, disks and RAID, file management, synchronization, media, monitoring, backups and auditing. Built with FastAPI, SQLAlchemy, Alembic and Bootstrap 5.
 
-**Status: Phase 2 of 14 complete (authentication, users, groups, permissions, audit events).** Any interface may be bound now that authentication exists; mark `NAS_SESSION_COOKIE_SECURE=true` when TLS terminates in front. See `docs/IMPLEMENTATION_PLAN.md`.
+**Status: Phases 1–5 complete (foundation, auth/RBAC, file manager + Samba, public uploads + quotas, disks/storage/RAID via the privileged helper).** See `docs/IMPLEMENTATION_PLAN.md`.
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt

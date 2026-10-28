@@ -10,7 +10,7 @@ Status legend: **Done** (implemented and verified), **Next**, **Planned**.
 | 2 | Authentication, users, groups, permissions, audit events | **Done** |
 | 3 | File manager and Samba integration | **Done** |
 | 4 | Public upload folder and quotas | **Done** |
-| 5 | Disk discovery, storage and RAID management (+ privileged helper) | Planned |
+| 5 | Disk discovery, storage and RAID management (+ privileged helper) | **Done** |
 | 6 | REST API, API tokens, mobile-client support | Planned |
 | 7 | Cloud and remote synchronization | Planned |
 | 8 | Photo gallery and personal media libraries | Planned |
@@ -179,12 +179,49 @@ Delivered:
 - `instance_id` is stored but not yet used by any feature.
 - The per-IP login limiter is in-process (single process; resets on restart). The account lockout is persistent in the database.
 - Sessions are not yet exposed through the API for mobile clients (that is Phase 6 with tokens/resumable transfers).
-- Monitoring is limited to CPU, memory, swap, two disk-usage entries and network byte counters. No processes, services, RAID or per-disk data (Phase 5 and 10).
+- Monitoring is limited to CPU, memory, swap, disk-usage entries and network byte counters; per-disk and RAID *discovery* exists (Phase 5) but there are no processes, services, RAID health curation or alerting yet (Phase 10).
 - No background job framework yet (needed from Phase 7 onward).
-- `smbd` reload is not performed by Phase 3: the web process is unprivileged and the privileged helper arrives in Phase 5. The app writes and validates the config and reports `reload_required`.
-- The file manager has no per-share or per-user folder permissions yet (that lands with quotas in Phase 4 and disks in Phase 5); access is governed by the `files:*`/`samba:*` permissions and the operator toggle.
+- `smbd` reload is performed by the Phase 5 helper when `NAS_HELPER_ENABLED=true`; without the helper the web process still writes where it can and reports `reload_required`.
+- The file manager has no per-share or per-user folder permissions yet; access is governed by the `files:*`/`samba:*` permissions and the operator toggle. Only the helper can mount/umount disks; there is no fstab persistence or auto-mount yet.
 - Anonymous public-upload quotas are keyed by client IP (`ip:`) — NAT/proxies coalesce addresses and botnets can fragment them; per-token quotas arrive with the Phase 6 API tokens. Uploads are also served on whatever interface the app binds; a public deployment must put the drop page behind TLS and (optionally) a rate limit.
 
-## Next: Phase 5 (outline)
+## Phase 5: completed
 
-Disk discovery, storage and RAID management through the privileged helper: read-only discovery of physical disks, volumes, filesystems and RAID arrays; a fixed allowlist of validated operations (mount/unmount with explicit confirmation, scrub, SMART status); the helper also takes over the deferred `smbd` reload from Phase 3/4.
+Delivered:
+
+- **Privileged helper process** (`app/helper/`, runs as root via `python -m app.helper`). A Unix socket (`NAS_HELPER_SOCKET`, default `/run/nas-manager/helper.sock`) with length-prefixed JSON framing (max 1 MiB), `SO_PEERCRED` authentication (root or `NAS_HELPER_ALLOWED_UIDS`), a fixed allowlist of exactly 10 operations (`ping`, `disk.list`, `disk.detail`, `disk.smart`, `volume.list`, `raid.list`, `mount`, `unmount`, `raid.scrub`, `samba.apply`), never a shell and never client-supplied command strings. Each handler builds its own `argv` from strictly validated parameters with a minimal `PATH`-only environment.
+- **Validation rules in the helper.** Device names must match a fixed pattern and never start with `-`; mount points must be absolute, normalized, free of `..` and null bytes; filesystem types are an allowlist (`ext2…f2fs`, `iso9660`, …); mount options are a comma-separated allowlist that refuses `loop`, `bind`, `rbind` and `remount`. `samba.apply` only ever writes the configured `smb.conf` path, requires the managed markers, re-validates with `testparm -s` against a temp copy, backs up the previous file and writes atomically, then reloads with `smbcontrol all reload-config`.
+- **Stateless confirm-then-execute.** Every state-changing operation has a **preview** endpoint that returns the exact plan, data-loss warnings and a deterministic **intent digest**; the confirm call must set `confirm: true` and echo the digest. The helper recomputes the digest from its own re-validated parameters and refuses on mismatch, so a confirmed action is bound to exactly what was previewed. No formatting, partitioning, destructive mount, erase or RAID rebuild is ever automated.
+- **Read-only discovery.** `GET /disks` (physical disks + partitions from `lsblk -J`), `GET /disks/{name}` (single-device tree), `GET /disks/{name}/smart` (`smartctl -j -H -A -i`, tolerating devices without SMART), `GET /storage/volumes` (`findmnt -J -b`) and `GET /storage/raid` (`/proc/mdstat` + `mdadm --detail --scan`, with member states, spare detection, failure detection and sync action/percent). All parsing is pure and unit-tested against fixtures.
+- **Actions.** `POST /disks/{name}/mount[/preview]`, `POST /disks/{name}/unmount[/preview]`, `POST /storage/raid/{name}/scrub[/preview]` (writes `check` to `/sys/block/mdX/md/sync_action`, never `repair`). Every action is audited (`disk.mounted`, `disk.unmounted`, `disk.action_failed`, `raid.scrub_started`, `raid.action_failed`) including failures.
+- **Samba reload taken over by the helper.** When `NAS_HELPER_ENABLED=true`, `POST /samba/apply` hands the rendered config to the helper (write + `smbd` reload, `reload_required: false`); without the helper the Phase 3/4 fallback (staged write, `reload_required: true`) is preserved. `GET /samba/status` adds `helper_available`.
+- **RBAC + migration `0005`.** New `disks:read` / `disks:write` tokens; `admin` gets both, `operator` gets read-only discovery. The migration seeds only the tokens (no new tables; discovery reads the live system).
+- **Web UI.** A Disks & storage page (physical disks with partition/mount point info, mounted volumes, RAID arrays with a degraded badge, SMART summary, mount/unmount/scrub flows behind a preview-then-confirm dialog). Mount options are offered from a fixed selection; all DOM is built with `textContent` (CSP-compatible). The nav gains a permission-gated Disks link and the Samba page shows helper availability. A `deploy/systemd/nas-manager-helper.service` unit and `NAS_HELPER_*` env templates are included.
+
+### Verification (executed in this workspace, Python 3.12, Ubuntu 24.04)
+
+| Check | Result |
+|-------|--------|
+| `pytest` | 304 passed (was 233 at Phase 4; +71 for Phase 5) |
+| Coverage (`app/`) | 88 % overall; Phase 5 workflow/validation/boundary/failure paths fully covered by unit tests + the helper socket round-trip test |
+| `ruff check` / `ruff format --check` | clean (118 files) |
+| `mypy` (strict, `app` + `tests`) | no issues in 105 source files |
+| `alembic upgrade head` on a fresh directory | applies `0001`–`0005`; drift test finds no differences; `0005 (head)` after upgrade |
+| Helper unit tests | allowlist shape; unknown op and non-object params rejected; `lsblk`/`findmnt`/`mdadm` argv fixed; option-flag/mountpoint/options injection rejected; intent mismatch refused; mount creates missing mount point; unmount only for the current mount point; scrub writes `check` only; `samba.apply` validates/backs up/writes/reloads and refuses non-configured paths |
+| Helper socket integration | a real `python -m app.helper` subprocess answered `ping` over its Unix socket through the app's client; oversized frames refused; `SO_PEERCRED` reports the peer's UID |
+| Disk API | discovery endpoints shape; anon 401 / viewer 403 / operator read-only / admin flows; mount/unmount/scrub confirm-then-execute; missing confirm or wrong intent → 400; helper down → 503 with audited failure; RAID scrub audited; the Disks page renders 200 |
+| Live helper + app smoke | `python -m app.helper` bound a socket and answered `ping` through the real client (env-configured socket); `python -m app` booted, health reported `head_revision: 0005`, login page served 200 |
+| Samba + helper | apply delegates to the helper, `reload_required: false`, status reports `helper_available` |
+
+### Not verified
+
+- The helper unit was **not run under real systemd**; `systemctl analyze`/start on the target host per `INSTALLATION.md`, and validate that the service account can traverse `/run/nas-manager` (the socket is `0660 root:<group>` with group from `NAS_HELPER_SOCKET_GROUP`).
+- **No real disks were mounted, unmounted or scrubbed** in this workspace (none are attached): the mount/unmount/scrub paths are mocked at the subprocess boundary. Exercise them against a scratch disk/USB stick on the NAS host **after** reading the preview text carefully.
+- `smartctl`/`testparm`/`smbcontrol`/`mount` were not run against real hardware here; the end-to-end helper test exercises `ping` only.
+- The Disks page was exercised via TestClient/curl, not a real browser.
+- PostgreSQL still not exercised (URL-driven only).
+
+## Phase 6: planned
+
+REST API, API tokens and mobile-client support (resumable uploads, sync cursors, per-token upload quotas).
+

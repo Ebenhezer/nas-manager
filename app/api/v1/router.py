@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from app.api.v1 import (
     audit,
     auth,
+    disks,
     files,
     groups,
     health,
@@ -27,5 +28,7 @@ api_router.include_router(audit.router)
 api_router.include_router(files.router)
 api_router.include_router(samba.router)
 api_router.include_router(settings.router)
+api_router.include_router(disks.router)
+api_router.include_router(disks.storage_router)
 api_router.include_router(public_uploads.router_public)
 api_router.include_router(public_uploads.router_admin)

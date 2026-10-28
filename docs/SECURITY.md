@@ -1,6 +1,6 @@
 # Security
 
-Status after Phase 4: sessions, RBAC, CSRF and audit logging are in place; the file manager (path-jailed), Samba share management (validated, merged config) and the public upload folder (upload-only, atomic per-uploader quotas) are implemented. The interactive dashboard and all management pages require authentication.
+Status after Phase 5: sessions, RBAC, CSRF and audit logging are in place; the file manager (path-jailed), Samba share management (validated, merged config), the public upload folder (upload-only, atomic per-uploader quotas) and disk/storage/RAID management (read-only discovery; confirmed, intent-bound actions through a root helper) are implemented. All management pages and the interactive dashboard require authentication.
 
 ## Controls in place
 
@@ -21,8 +21,10 @@ Status after Phase 4: sessions, RBAC, CSRF and audit logging are in place; the f
 | CSP-compatible UI | No inline script or style; DOM is built with `textContent` (no `innerHTML`). A test fails if inline code appears. |
 | File manager path jail | Every requested path is resolved against a configured managed root and rejected when it escapes (`..`, absolute paths, null bytes, symlinks resolving outside the root). Listing/search never follow symlinks; uploads stream to a temp file and are atomically renamed, and the per-file cap (`NAS_MAX_UPLOAD_BYTES`) is enforced mid-stream so concurrent uploads cannot bypass it. Tested, including symlink escape. |
 | Public upload folder | Upload-only: there is no public listing, download or search endpoint; the public policy endpoint exposes only the enabled flag and the per-file cap. Filenames are sanitized (no separators/`..`/null bytes, ≤ 255 bytes) and auto-uniquified — the folder never overwrites. Files land in digest-named per-uploader directories; per-file and per-uploader quotas are enforced atomically inside the transaction that records the file (the uploader's quota row is locked first), so concurrent uploads cannot bypass a quota and a rejected upload consumes nothing and leaves no temp file. Deletion paths are re-verified against the upload root. Tested. |
-| Samba config safety | The DB is the source of truth; `smb.conf` is only touched inside the managed markers, validated with `testparm -s` against a temp copy before writing, backed up first, written atomically. Free-text share fields reject newlines (no config injection); share names are restricted to `[a-z0-9][a-z0-9._-]*`. Reloading `smbd` is deferred to the Phase 5 privileged helper — this module never runs privileged commands. Tested. |
-| Least privilege / operator toggle | `operator`/`viewer` cannot open Files/Samba by default. Admin may flip `operator_view_files_samba` in Settings to grant operators read-only access; the toggle never grants write permissions and is audited. Tested. |
+| Samba config safety | The DB is the source of truth; `smb.conf` is only touched inside the managed markers, validated with `testparm -s` against a temp copy before writing, backed up first, written atomically. Free-text share fields reject newlines (no config injection); share names are restricted to `[a-z0-9][a-z0-9._-]*`. When the privileged helper is enabled, Apply delegates the write + `smbd` reload to it (which re-validates with `testparm`, backs up and writes atomically before reloading). Tested. |
+| Privileged helper isolation | The web process never runs as root and holds no capabilities. All privileged work happens in a separate helper bound to a fixed allowlist of 10 validated operations over a Unix socket (`SO_PEERCRED` UID check + `0660 root:<group>` socket; responses and requests are length-prefixed JSON, max 1 MiB). The helper never executes client-supplied commands or option flags: device names cannot start with `-`, mount points must be absolute and normalised, filesystem types and option tokens are allowlisted (options `loop`/`bind`/`rbind`/`remount` refused), RAID devices must exist under `/sys/block/md*`, and `samba.apply` only ever writes the configured `smb.conf` path after requiring the managed markers. Tested. |
+| Confirmed destructive operations | Nothing is ever mounted/unmounted or scrubbed without the API user explicitly confirming (`confirm: true` on the action call), after a `…/preview` endpoint has shown the exact plan and warnings. The action is bound to the previewed parameters by a deterministic intent digest that the helper re-derives from its own re-validated parameters; mismatches are refused. RAID scrub only ever writes `check` (never `repair`) to `md/sync_action`. Tested. |
+| Least privilege / operator toggle | `operator`/`viewer` cannot open Files/Samba by default. Admin may flip `operator_view_files_samba` in Settings to grant operators read-only access; the toggle never grants write permissions and is audited. Operators receive `disks:read` (read-only discovery) only; mounting/unmounting/scrubbing requires `disks:write` (admin by default). Tested. |
 | Static file serving | Path traversal attempts against `/static` return 400/404 (tested). |
 | Error hygiene | Unhandled exceptions return a generic 500 envelope with a request id and no internals (tested). |
 | API docs | Swagger/OpenAPI disabled unless `NAS_DEBUG=true`. |
@@ -34,14 +36,16 @@ Status after Phase 4: sessions, RBAC, CSRF and audit logging are in place; the f
 - Create the first administrator with `sudo -u nas-manager python -m app.cli bootstrap-admin` after install; there is no web endpoint that creates accounts before login.
 - Guard `/etc/nas-manager/nas-manager.env` (root:nas-manager, 0640) — it is sensitive once `NAS_SESSION_COOKIE_SECURE` and other production overrides are set.
 
+- Open the Disks page only with `NAS_HELPER_ENABLED=true` and the helper service running; otherwise discovery returns 503 and the page shows a "helper offline" badge. The helper socket lives at `/run/nas-manager/helper.sock` (`0660 root:nas-manager`, `SO_PEERCRED`-enforced); the service account UID must be listed in `NAS_HELPER_ALLOWED_UIDS`.
+
 ## Not yet implemented
 
-The privileged helper (Phase 5), API tokens and mobile clients (6), secret encryption at rest, TLS termination inside the app, dependency vulnerability scanning, per-token upload quotas, and the syslog/journald forwarding of audit events (13).
+API tokens and mobile clients (6), secret encryption at rest, TLS termination inside the app, dependency vulnerability scanning, per-token upload quotas, and the syslog/journald forwarding of audit events (13). fstab persistence / auto-mount of disks is intentionally out of scope.
 
 ## Rules for later phases (from the project instructions)
 
-- The web process must never run as root; privileged actions (e.g. reloading `smbd`, disk administration) go through an allowlisted helper that never executes client-supplied commands. The Samba apply step already stops at the boundary and reports `reload_required`.
-- No automatic format, partition, destructive mount, erase or RAID rebuild. Read-only discovery by default; dry-run and explicit confirmation for destructive operations.
+- The web process must never run as root; privileged actions (e.g. reloading `smbd`, disk administration) go through the allowlisted helper, which never executes client-supplied commands. The Samba apply step delegates to the helper when enabled and otherwise stops at the boundary and reports `reload_required`.
+- No automatic format, partition, destructive mount, erase or RAID rebuild. Read-only discovery by default; dry-run and explicit confirmation for destructive operations (Phase 5 implements both).
 - Never delete data silently during two-way sync.
 - Public-upload quotas are keyed by client IP for anonymous clients; per-token quotas and rate limiting for the drop endpoint are follow-up hardening (Phase 6) — a public deployment should terminate TLS, may additionally rate-limit `/public/upload`, and should keep `NAS_PUBLIC_UPLOAD_ENABLED` auditable through the Settings page.
 - No plaintext passwords, API secrets or cloud credentials; exports must protect secrets; imports must be validated and reversible.

@@ -36,6 +36,7 @@ from app.core.errors import (
 )
 from app.models import SambaShare, User
 from app.services import audit
+from app.services.helper_client import call_helper, helper_ping
 
 SHARE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
@@ -413,16 +414,104 @@ def apply_config(
     actor: User,
     context: dict[str, str | None] | None = None,
 ) -> dict[str, object]:
-    """Render, validate, back up and write ``smb.conf`` for the current shares.
+    """Render, validate and install ``smb.conf`` for the current shares.
 
-    Returns ``{"config_path", "backup_path", "reload_required", "message"}``.
-    Reloading ``smbd`` is deliberately not attempted (Phase 5 helper).
+    When the privileged helper is enabled, the web process hands the rendered,
+    already-testparm-validated configuration to the helper, which re-validates
+    it, backs up the previous file, writes it atomically and reloads ``smbd``
+    (``reload_required=False``). Otherwise the web process writes where the OS
+    lets it and reports ``reload_required=True`` (a privileged step in
+    production). Returns a dict with config/backup paths, reload state and a
+    human-readable message.
     """
     shares = list_shares(session)
     existing = _read_existing(settings.samba_config_path)
     managed = render_managed_block(shares)
     merged = merge_managed_section(existing, managed)
     validate_config_text(shares, merged)
+
+    if settings.helper_enabled:
+        return _apply_via_helper(session, settings, merged, actor=actor, context=context)
+    return _apply_unprivileged(session, settings, merged, actor=actor, context=context)
+
+
+def _apply_via_helper(
+    session: Session,
+    settings: Settings,
+    merged: str,
+    *,
+    actor: User,
+    context: dict[str, str | None] | None,
+) -> dict[str, object]:
+    """Hand the rendered config to the helper; it re-validates, backs up,
+    writes atomically and reloads smbd."""
+    request: dict[str, object] = {
+        "config_path": str(settings.samba_config_path),
+        "content": merged,
+    }
+    try:
+        result = call_helper(settings, "samba.apply", request)
+    except Exception as exc:
+        audit.record_audit_event(
+            session,
+            event=audit.SAMBA_CONFIG_APPLIED,
+            category=audit.CATEGORY_SAMBA,
+            outcome=audit.OUTCOME_FAILURE,
+            actor=actor,
+            target_type="smb.conf",
+            target_id=str(settings.samba_config_path),
+            details={"error": str(exc), "config_path": str(settings.samba_config_path)},
+            **_audit_ctx(context),
+            commit=False,
+        )
+        session.commit()
+        raise
+    reload_performed = bool(result.get("reload_performed"))
+    reload_message = result.get("reload_message")
+    backup_path = result.get("backup_path")
+    audit.record_audit_event(
+        session,
+        event=audit.SAMBA_CONFIG_APPLIED,
+        category=audit.CATEGORY_SAMBA,
+        actor=actor,
+        target_type="smb.conf",
+        target_id=str(settings.samba_config_path),
+        details={
+            "config_path": str(settings.samba_config_path),
+            "backup_path": backup_path,
+            "managed_share_count": len(list_shares(session)),
+            "reload_performed": reload_performed,
+            "helper": True,
+        },
+        **_audit_ctx(context),
+        commit=False,
+    )
+    session.commit()
+    if reload_performed:
+        message = "Configuration validated and written by the privileged helper; smbd reloaded."
+    else:
+        message = (
+            "Configuration validated and written by the privileged helper, "
+            f"but reloading smbd failed: {reload_message or 'unknown error'}"
+        )
+    return {
+        "config_path": str(settings.samba_config_path),
+        "backup_path": backup_path,
+        "reload_required": not reload_performed,
+        "helper_available": True,
+        "message": message,
+    }
+
+
+def _apply_unprivileged(
+    session: Session,
+    settings: Settings,
+    merged: str,
+    *,
+    actor: User,
+    context: dict[str, str | None] | None,
+) -> dict[str, object]:
+    """Phase 3/4 fallback: write where the OS allows; never reload smbd."""
     backup_path = _backup_config(settings.samba_config_path, settings.resolved_samba_backup_dir)
     _atomic_write(settings.samba_config_path, merged)
     audit.record_audit_event(
@@ -435,7 +524,7 @@ def apply_config(
         details={
             "config_path": str(settings.samba_config_path),
             "backup_path": backup_path,
-            "managed_share_count": len(shares),
+            "managed_share_count": len(list_shares(session)),
         },
         **_audit_ctx(context),
         commit=False,
@@ -445,6 +534,7 @@ def apply_config(
         "config_path": str(settings.samba_config_path),
         "backup_path": backup_path,
         "reload_required": True,
+        "helper_available": False,
         "message": (
             "Configuration written and validated. Reloading smbd requires a privileged "
             "helper (Phase 5); until then run `smbcontrol all reload-config` manually."
@@ -465,6 +555,34 @@ def samba_status(session: Session, settings: Settings) -> dict[str, object]:
     markers_present = MANAGED_BEGIN in [
         line.strip() for line in existing.splitlines()
     ] and MANAGED_END in [line.strip() for line in existing.splitlines()]
+
+    helper_available = False
+    helper_error: str | None = None
+    if settings.helper_enabled:
+        try:
+            helper_ping(settings)
+            helper_available = True
+        except Exception as exc:  # status must never crash
+            helper_available = False
+            helper_error = str(exc)
+    # When the helper is available it applies + reloads atomically, so a
+    # reload is only owed when the on-disk config no longer matches the
+    # database. Without the helper a reload always needs an operator.
+    reload_required = pending_changes or not helper_available
+    if helper_available:
+        message = (
+            "The privileged helper is available: Apply writes the validated "
+            "configuration and reloads smbd automatically."
+        )
+        if pending_changes:
+            message = "Shares were changed since the last Apply; smbd still runs the old config."
+    else:
+        message = (
+            "Reloading smbd requires a privileged helper (Phase 5); it is not available. "
+            "Shares are safe to edit; run Apply to write the validated config."
+        )
+        if helper_error:
+            message = f"{message} Helper error: {helper_error}"
     return {
         "config_path": str(config_path),
         "config_exists": config_path.exists(),
@@ -472,9 +590,7 @@ def samba_status(session: Session, settings: Settings) -> dict[str, object]:
         "managed_share_count": len(shares),
         "backup_dir": str(settings.resolved_samba_backup_dir),
         "pending_changes": pending_changes,
-        "reload_required": True,
-        "message": (
-            "Reloading smbd requires a privileged helper (Phase 5). "
-            "Shares are safe to edit; run Apply to write the validated config."
-        ),
+        "helper_available": helper_available,
+        "reload_required": reload_required,
+        "message": message,
     }

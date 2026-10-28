@@ -102,6 +102,16 @@
           <span>Uploads</span>
         </a>
         {% endif %}
+        {% if can('disks:read') %}
+        <a class="app-nav-link{% if request.url.path == '/disks' %} active{% endif %}" href="/disks"{% if request.url.path == '/disks' %} aria-current="page"{% endif %}>
+          <svg class="app-nav-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="2.4"/>
+            <path d="M12 4v3M12 17v3M5 12h3M16 12h3"/>
+            <circle cx="17" cy="7" r="1.6"/><circle cx="7" cy="17" r="1.6"/>
+          </svg>
+          <span>Disks</span>
+        </a>
+        {% endif %}
         {% if can('settings:read') %}
         <a class="app-nav-link{% if request.url.path == '/settings' %} active{% endif %}" href="/settings"{% if request.url.path == '/settings' %} aria-current="page"{% endif %}>
           <svg class="app-nav-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

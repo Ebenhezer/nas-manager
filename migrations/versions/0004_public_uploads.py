@@ -70,7 +70,8 @@ def _revoke_permissions() -> None:
     if role_ids:
         bind.execute(
             grants.delete().where(
-                grants.c.role_id.in_(role_ids), grants.c.permission.in_(["uploads:read", "uploads:write"])
+                grants.c.role_id.in_(role_ids),
+                grants.c.permission.in_(["uploads:read", "uploads:write"]),
             )
         )
 

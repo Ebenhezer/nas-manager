@@ -34,6 +34,25 @@ class Settings(BaseSettings):
     database_url: str | None = None
     auto_migrate: bool = False
 
+    # ------------------------------------------------------------------
+    # Privileged helper (Phase 5). The web process never runs as root;
+    # every privileged action (disk mount/umount, RAID scrub, SMART reads,
+    # Samba config write + smbd reload) goes through this separate,
+    # tightly restricted helper process over a Unix socket. These settings
+    # only configure *access*: discovery/actions fail with a clear error
+    # when NAS_HELPER_ENABLED is false or the socket is unreachable.
+    # ------------------------------------------------------------------
+    helper_enabled: bool = False
+    helper_socket: Path | None = None
+    helper_timeout_seconds: int = Field(default=10, ge=1, le=120)
+    # Comma-separated numeric UIDs allowed to connect (root is always
+    # allowed). The deploy template points this at the NAS manager service
+    # account's UID; the helper additionally verifies identity via SO_PEERCRED.
+    helper_allowed_uids: str = "0"
+    # Socket group ownership (name). The helper chowns the socket to
+    # root:<group> so the unprivileged service user can connect through it.
+    helper_socket_group: str = "nas-manager"
+
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     log_format: Literal["json", "text"] = "json"
     log_to_console: bool = True
@@ -110,7 +129,12 @@ class Settings(BaseSettings):
     public_upload_default_quota_bytes: int = Field(default=_GIB, ge=1)
 
     @field_validator(
-        "data_dir", "log_dir", "samba_config_path", "samba_backup_dir", "public_upload_dir"
+        "data_dir",
+        "log_dir",
+        "samba_config_path",
+        "samba_backup_dir",
+        "public_upload_dir",
+        "helper_socket",
     )
     @classmethod
     def _absolute(cls, value: Path | None) -> Path | None:
@@ -172,6 +196,23 @@ class Settings(BaseSettings):
             if self.public_upload_dir is not None
             else self.data_dir / "uploads"
         )
+
+    @property
+    def resolved_helper_socket(self) -> Path:
+        """Unix socket the privileged helper listens on."""
+        if self.helper_socket is not None:
+            return self.helper_socket
+        return Path("/run/nas-manager/helper.sock")
+
+    @property
+    def helper_allowed_uid_set(self) -> frozenset[int]:
+        """Numeric UIDs permitted to talk to the helper (always includes root)."""
+        uids: set[int] = {0}
+        for part in self.helper_allowed_uids.split(","):
+            token = part.strip()
+            if token and token.isdigit() and int(token) >= 0:
+                uids.add(int(token))
+        return frozenset(uids)
 
     @property
     def resolved_database_url(self) -> str:

@@ -1,0 +1,43 @@
+[Unit]
+Description=NAS Manager privileged helper
+Documentation=file:///opt/nas-manager/docs/INSTALLATION.md
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/opt/nas-manager/.venv/bin/python -m app.helper
+EnvironmentFile=/etc/nas-manager/nas-manager.env
+Environment=NAS_HELPER_ENABLED=true
+Environment=NAS_HELPER_SOCKET=/run/nas-manager/helper.sock
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+# The helper owns the run directory holding the socket; NAS_HELPER_SOCKET_GROUP
+# controls which group may connect through it (default: nas-manager).
+RuntimeDirectory=nas-manager
+RuntimeDirectoryMode=0750
+UMask=0027
+
+# The helper runs as root because it must mount/unmount block devices
+# (CAP_SYS_ADMIN), read SMART data (raw device I/O), manage md arrays and write
+# /etc/samba. The web unit keeps its strict sandbox; this unit only restricts
+# what does not interfere with those duties. Mount/umount and the md scrub
+# write under /sys, so ProtectKernelTunables/ProtectSystem must stay off here.
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_MKNOD CAP_RAWIO CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER CAP_SETGID
+PrivateTmp=true
+ProtectHome=true
+ProtectHostname=true
+ProtectClock=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@resources
+
+[Install]
+WantedBy=multi-user.target

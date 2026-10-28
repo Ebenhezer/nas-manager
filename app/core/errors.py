@@ -78,6 +78,15 @@ class ConfigurationError(AppError):
     code = "configuration_error"
 
 
+class ServiceUnavailableError(AppError):
+    """A required subsystem is temporarily unreachable (e.g. the privileged
+    helper socket is down or not configured). 503: retry may help.
+    """
+
+    status_code = 503
+    code = "service_unavailable"
+
+
 def _request_id(request: Request) -> str | None:
     value = getattr(request.state, "request_id", None)
     return value if isinstance(value, str) else None

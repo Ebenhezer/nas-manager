@@ -26,6 +26,8 @@ PERMISSIONS: list[str] = [
     "samba:write",
     "uploads:read",
     "uploads:write",
+    "disks:read",
+    "disks:write",
 ]
 
 ALL_PERMISSIONS: frozenset[str] = frozenset(PERMISSIONS)
@@ -49,6 +51,7 @@ ROLE_DEFAULT_PERMISSIONS: dict[str, list[str]] = {
         "system:read",
         "settings:read",
         "uploads:read",
+        "disks:read",
     ],
     "viewer": ["dashboard:read"],
 }
