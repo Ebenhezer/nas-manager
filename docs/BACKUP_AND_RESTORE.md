@@ -2,16 +2,18 @@
 
 > **Interim, manual procedure.** Automated, versioned, verified backups and tested restore workflows are Phase 11 and do not exist yet.
 
-## What state exists (Phases 1–9)
+## What state exists (Phases 1–10)
 
 | Path (systemd deployment) | Contents |
 |---------------------------|----------|
-| `/var/lib/nas-manager/nas.db` (+ `-wal`, `-shm`) | SQLite database: `app_settings`, users, groups, roles/permissions, sessions (token SHA-256 only), audit events, public-upload records and quotas, API tokens (SHA-256 only), open resumable uploads (`upload_sessions`), the file change journal (`file_changes`), remote connections (credentials encrypted), sync jobs, per-file sync records, run history and conflicts, media libraries and their group grants, the media index (`media_items`, incl. EXIF metadata and SHA-256), albums, the media change journal and transcode records |
-| `/var/lib/nas-manager/secrets/credentials.key` | Fernet key that decrypts the stored remote credentials (Phase 7). **Without it every remote credential must be re-entered.** Anyone holding both the key and the database can decrypt the credentials, so keep backups of the key protected (and preferably stored separately from database copies). |
+| `/var/lib/nas-manager/nas.db` (+ `-wal`, `-shm`) | SQLite database: `app_settings`, users, groups, roles/permissions, sessions (token SHA-256 only), audit events, public-upload records and quotas, API tokens (SHA-256 only), open resumable uploads (`upload_sessions`), the file change journal (`file_changes`), remote connections (credentials encrypted), sync jobs, per-file sync records, run history and conflicts, media libraries and their group grants, the media index (`media_items`, incl. EXIF metadata and SHA-256), albums, the media change journal and transcode records, and (Phase 10) metric history, the latest check results, alert rules, alert history, notification channels (secrets encrypted) and the notification outbox |
+| `/var/lib/nas-manager/secrets/credentials.key` | Fernet key that decrypts the stored remote credentials (Phase 7) and alert channel secrets (Phase 10: SMTP passwords, webhook secrets). **Without it every remote credential and channel secret must be re-entered.** Anyone holding both the key and the database can decrypt the credentials, so keep backups of the key protected (and preferably stored separately from database copies). |
 | `/var/lib/nas-manager/media/` (`NAS_MEDIA_DIR`) | **User data**: every user's personal photo/video library (`<username>/…`, Phase 8). Back it up like any other share. |
 | `/var/lib/nas-manager/media-cache/` (`NAS_MEDIA_CACHE_DIR`) | Thumbnails, video posters and transcodes (Phases 8–9). **Disposable**: exclude it from backups; it is regenerated on demand (transcodes on the next request). |
 | `/var/log/nas-manager/` | Rotated application logs |
 | `/etc/nas-manager/nas-manager.env` | Configuration (sensitive once production overrides are in place) |
+
+Metric history (`metric_samples`) and check snapshots are rebuilt by the worker and can be lost without harm. Alert rules and channels are configuration and should be kept. After restoring an older database, alerts that were open in the backup are re-evaluated on the worker's next pass: they resolve, with a notification, if the condition no longer holds. Queued notifications that had not been delivered when the backup was taken are sent again.
 
 Sessions are stored in the database, so a restore also restores login state; the password hashes are Argon2id (safe to back up). To invalidate all sessions after a restore run `python -m app.cli bootstrap-admin --username <admin> --reset-password` or delete rows from `auth_sessions`.
 

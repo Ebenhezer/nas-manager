@@ -25,6 +25,8 @@ FEATURES = [
     "remote_sync",
     "media_gallery",
     "video_streaming",
+    "monitoring",
+    "alerting",
 ]
 
 

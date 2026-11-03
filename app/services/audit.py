@@ -30,6 +30,7 @@ CATEGORY_API_TOKEN = "api_token"  # noqa: S105
 CATEGORY_UPLOAD = "upload"
 CATEGORY_REMOTE_SYNC = "remote_sync"
 CATEGORY_MEDIA = "media"
+CATEGORY_MONITORING = "monitoring"
 
 OUTCOME_SUCCESS = "success"
 OUTCOME_FAILURE = "failure"
@@ -148,6 +149,17 @@ MEDIA_ALBUM_ITEMS_CHANGED = "media.album_items_changed"
 # Video streaming (Phase 9)
 MEDIA_TRANSCODE_REQUESTED = "media.transcode_requested"
 MEDIA_TRANSCODE_FAILED = "media.transcode_failed"
+
+# Monitoring and alerting (Phase 10)
+ALERT_RULE_CREATED = "alert_rule.created"
+ALERT_RULE_UPDATED = "alert_rule.updated"
+ALERT_RULE_DELETED = "alert_rule.deleted"
+ALERT_CHANNEL_CREATED = "alert_channel.created"
+ALERT_CHANNEL_UPDATED = "alert_channel.updated"
+ALERT_CHANNEL_DELETED = "alert_channel.deleted"
+ALERT_CHANNEL_TESTED = "alert_channel.tested"
+ALERT_ACKNOWLEDGED = "alert.acknowledged"
+ALERT_NOTIFICATION_FAILED = "alert.notification_failed"
 
 
 class RequestContext(TypedDict):

@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    alerts,
     api_tokens,
     audit,
     auth,
@@ -11,6 +12,7 @@ from app.api.v1 import (
     groups,
     health,
     media,
+    monitoring,
     public_uploads,
     remote_sync,
     remotes,
@@ -49,3 +51,7 @@ api_router.include_router(remote_sync.jobs_router)
 api_router.include_router(remote_sync.runs_router)
 api_router.include_router(remote_sync.conflicts_router)
 api_router.include_router(media.router)
+api_router.include_router(monitoring.router)
+api_router.include_router(alerts.router)
+api_router.include_router(alerts.rules_router)
+api_router.include_router(alerts.channels_router)

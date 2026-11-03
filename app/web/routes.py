@@ -263,6 +263,30 @@ def remote_sync_page(
     return templates.TemplateResponse(request, "remote_sync.html", _page_context(request, current))
 
 
+@router.get("/monitoring", response_class=HTMLResponse)
+def monitoring_page(
+    request: Request, current: CurrentUser | None = Depends(resolve_web_user)
+) -> Response:
+    redirect = _protected(current)
+    if redirect is not None:
+        return redirect
+    if current is None or "system:read" not in current.permissions:
+        raise UnauthorizedError("Missing required permission: system:read")
+    return templates.TemplateResponse(request, "monitoring.html", _page_context(request, current))
+
+
+@router.get("/alerts", response_class=HTMLResponse)
+def alerts_page(
+    request: Request, current: CurrentUser | None = Depends(resolve_web_user)
+) -> Response:
+    redirect = _protected(current)
+    if redirect is not None:
+        return redirect
+    if current is None or "system:read" not in current.permissions:
+        raise UnauthorizedError("Missing required permission: system:read")
+    return templates.TemplateResponse(request, "alerts.html", _page_context(request, current))
+
+
 def _gallery(request: Request, current: CurrentUser | None, title: str, kind: str) -> Response:
     redirect = _protected(current)
     if redirect is not None:

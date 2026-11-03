@@ -423,6 +423,58 @@ Audited under category `media`: `media.library_created/updated/deleted/groups_ch
 
 Audited: `media.transcode_requested`; failed transcodes write `media.transcode_failed` (outcome `failure`, with the ffmpeg error).
 
+## System monitoring (Phase 10, `system:read`)
+
+- `GET /monitoring/overview` returns `{"enabled", "summary": <same shape as /system/summary>, "checks": [check…], "alerts": <alert summary>}`. The summary covers the data dir and every managed file root.
+- `GET /monitoring/history?range=1h|6h|24h|7d` returns `{"range", "bucket_seconds", "sample_seconds", "points": [{"at", "cpu_percent", "cpu_percent_max", "memory_percent", "swap_percent", "load_per_core", "net_sent_bps", "net_recv_bps", "disks": {"<path>": percent}}]}`.
+  - Buckets are 1/2/5/30 minutes.
+  - Network rates are `null` for the first sample and across counter resets (reboots).
+  - Any other range returns 422.
+- `GET /monitoring/processes?sort=cpu|memory&limit=1-500` returns `[{"pid", "name", "username", "status", "cpu_percent", "memory_percent", "memory_rss", "started_at"}]`. `limit` defaults to `NAS_MONITOR_PROCESS_LIMIT`. **Command lines are never returned.**
+- `GET /monitoring/services` returns the worker's latest `systemctl show` snapshot: `[{"unit", "status": ok|warning|critical|unknown, "summary", "description", "load_state", "active_state", "sub_state", "unit_file_state", "active_since", "checked_at"}]`.
+  - `unknown` means not installed, systemctl unavailable, or no D-Bus.
+  - `critical` means `failed` or `inactive`.
+  - `warning` means activating or deactivating.
+- `GET /monitoring/raid` returns `{"available", "error", "arrays": [<Phase 5 RaidArray>]}`, read live from `/proc/mdstat`.
+- `GET /monitoring/checks?kind=service|raid|smart|helper` returns `[{"key", "kind", "target", "status", "summary", "details", "checked_at"}]`.
+
+## Alerts, rules and channels (Phase 10)
+
+### Alerts
+
+- `GET /alerts?state=open|pending|firing|resolved&severity=warning|critical&limit&offset` (`system:read`) returns `{"items": [alert…], "total", "limit", "offset"}`.
+  - Each alert is `{"id", "rule_id", "rule_name", "metric", "target", "state", "severity", "message", "value", "started_at", "firing_at", "last_seen_at", "resolved_at", "acknowledged_at", "acknowledged_by"}`.
+  - Items are newest first. An unknown state or severity returns 400.
+- `GET /alerts/summary` (`system:read`) returns `{"counts": {"firing", "pending", "critical", "warning", "unacknowledged"}, "synthetic": [{"key", "severity", "message"}], "worker_online", "last_sample_at"}`. `synthetic` holds `worker_offline` when the worker heartbeat is stale.
+- `POST /alerts/{id}/acknowledge` (`system:write`) returns the alert. Only firing alerts can be acknowledged (409 otherwise). The call is idempotent.
+
+### Rules
+
+- `GET /alert-rules` (`system:read`) returns `[{"id", "name", "metric", "target", "comparison", "threshold", "duration_seconds", "severity", "enabled", "notify", "builtin", "open_alerts", "created_at", "updated_at"}]`.
+- `POST /alert-rules` (`system:write`) takes `{"name", "metric", "target"?, "comparison": "gt"|"lt", "threshold"?, "duration_seconds", "severity", "enabled", "notify"}` and returns 201.
+  - Metrics: `cpu_percent`, `memory_percent`, `swap_percent`, `disk_percent` (threshold 0–100); `load_per_core` (threshold 0–1000); `raid_degraded`, `raid_failed_member`, `smart_failed`, `service_down`, `helper_unavailable` (no threshold).
+  - `target` limits a rule to one disk path, array, device or unit. Empty means all.
+  - An unknown metric or severity, or a missing or out-of-range threshold, returns 400. A duplicate name returns 409.
+- `PATCH /alert-rules/{id}` (`system:write`) accepts any of the create fields except `metric`; `target: ""` clears the target. Disabling a rule closes its open alerts without notifying. After a threshold or target change, the next evaluation resolves (and notifies about) whatever no longer matches.
+- `DELETE /alert-rules/{id}` (`system:write`) returns 204. Built-in rules return 409 (disable them instead).
+
+### Channels
+
+- `GET /alert-channels` (`system:read`) returns `[{"id", "name", "kind", "config", "secrets_set", "credentials_readable", "min_severity", "allow_insecure", "send_resolved", "enabled", "last_test_at", "last_test_ok", "last_test_message", "created_at", "updated_at"}]`. Secret values are never returned.
+- `POST /alert-channels` (`system:write`, **session only**) takes `{"name", "kind": "email"|"webhook", "config", "secrets", "min_severity", "allow_insecure", "send_resolved", "enabled"}` and returns 201.
+  - Email config: `{"host", "port", "security": "starttls"|"tls"|"none", "username"?, "from_address", "to": [addresses] or "a@x, b@y"}`. Secret: `password`.
+  - Webhook config: `{"url"}`. Secrets: `signing_secret` (adds `X-NAS-Signature: sha256=<HMAC of the body>`) and `authorization` (sent as the `Authorization` header).
+  - `security: "none"` and `http://` URLs need `allow_insecure: true`. Credentials in the URL, unknown fields and multi-line values return 400.
+- `PATCH /alert-channels/{id}` (session only): `config` keys merge; `secrets` keys replace (string), clear (`null`/`""`) or stay unchanged (missing). The kind cannot change.
+- `DELETE /alert-channels/{id}` (`system:write`) returns 204. Notifications still queued for the channel are dropped with it.
+- `POST /alert-channels/{id}/test` (session only) returns `{"ok", "message"}`. It sends a test message synchronously and records the result.
+
+Webhook body for alert events: `{"event": "firing"|"resolved", "host", "alert": {"id", "rule", "metric", "target", "severity", "state", "message", "value", "started_at", "firing_at", "resolved_at"}, "source": "nas-manager", "version"}`. Test messages send `{"event": "test", "host", "message", "source", "version"}`.
+
+`GET /info` lists the features `monitoring` and `alerting`. A Postman collection covering the whole flow is in `docs/postman/nas-manager-phase10.postman_collection.json`. It needs the worker and a webhook receiver; set `admin_password` and `webhook_url`.
+
+Audited (category `monitoring`): `alert_rule.created/updated/deleted`, `alert_channel.created/updated/deleted/tested` (secret field names only, never values), `alert.acknowledged`, and `alert.notification_failed` (outcome `failure`, actor `system`).
+
 ## Planned
 
-Monitoring and alerting (10), backups (11). Each phase will extend this document.
+Backups (11), configuration export/import (12). Each phase will extend this document.

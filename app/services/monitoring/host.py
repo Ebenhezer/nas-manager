@@ -1,7 +1,7 @@
-"""Host summary for the dashboard.
+"""Live host summary: CPU, memory, disk usage and network counters.
 
-Phase 1 scope: basic CPU, memory, disk-usage and network counters only.
-Process, RAID and service monitoring are Phase 10.
+Used by the dashboard (``GET /system/summary``) and, since Phase 10, by the
+worker's periodic metric samples.
 """
 
 from __future__ import annotations
@@ -45,6 +45,13 @@ def _load_average() -> list[float] | None:
         return [round(value, 2) for value in os.getloadavg()]
     except OSError:
         return None
+
+
+def load_per_core(load_average: list[float] | None, cores: int | None) -> float | None:
+    """The 1-minute load average divided by the logical core count."""
+    if not load_average or not cores:
+        return None
+    return round(load_average[0] / cores, 3)
 
 
 def _filesystem_key(path: Path) -> str:

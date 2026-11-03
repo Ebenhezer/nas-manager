@@ -64,6 +64,11 @@ RestrictNamespaces=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
+# AF_UNIX is also what the monitor (Phase 10) needs: `systemctl show` talks to
+# systemd over the D-Bus system socket, and SMART reads go through the helper
+# socket. Monitoring reads /proc/mdstat and the process table; do not add
+# ProtectProc=invisible or ProcSubset=pid unless you accept losing the process
+# list and RAID checks.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources

@@ -12,6 +12,19 @@
 <div id="error-banner" class="alert alert-danger d-none" role="alert"></div>
 
 <div class="row g-3">
+  {% if can('system:read') %}
+  <div class="col-12">
+    <div class="card" id="alerts-card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Active alerts</span>
+        <a id="alerts-count" class="badge text-bg-secondary text-decoration-none" href="/alerts">checking…</a>
+      </div>
+      <ul class="list-group list-group-flush" id="alerts-list">
+        <li class="list-group-item text-body-secondary">Loading…</li>
+      </ul>
+    </div>
+  </div>
+  {% endif %}
   <div class="col-12 col-lg-6">
     <div class="card h-100">
       <div class="card-header">Host</div>
@@ -89,10 +102,11 @@
   </div>
 </div>
 
+{% if can('system:read') %}
 <p class="text-body-secondary small mt-4 mb-0">
-  Host metrics only. Disk discovery, RAID, services and process monitoring arrive
-  in later phases.
+  History, services, RAID, SMART and processes are on the <a href="/monitoring">Monitoring</a> page.
 </p>
+{% endif %}
 {% endblock %}
 {% block scripts %}
 <script type="module" src="{{ url_for('static', path='js/dashboard.js') }}"></script>

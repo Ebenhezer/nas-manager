@@ -112,6 +112,21 @@
           <span>Disks</span>
         </a>
         {% endif %}
+        {% if can('system:read') %}
+        <a class="app-nav-link{% if request.url.path == '/monitoring' %} active{% endif %}" href="/monitoring"{% if request.url.path == '/monitoring' %} aria-current="page"{% endif %}>
+          <svg class="app-nav-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M3 12h4l3-7 4 14 3-7h4"/>
+          </svg>
+          <span>Monitoring</span>
+        </a>
+        <a class="app-nav-link{% if request.url.path == '/alerts' %} active{% endif %}" href="/alerts"{% if request.url.path == '/alerts' %} aria-current="page"{% endif %}>
+          <svg class="app-nav-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/>
+            <path d="M10 20a2 2 0 0 0 4 0"/>
+          </svg>
+          <span>Alerts</span>
+        </a>
+        {% endif %}
         {% if can('settings:read') %}
         <a class="app-nav-link{% if request.url.path == '/settings' %} active{% endif %}" href="/settings"{% if request.url.path == '/settings' %} aria-current="page"{% endif %}>
           <svg class="app-nav-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

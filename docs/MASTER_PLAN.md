@@ -1,7 +1,7 @@
 # NAS Manager — Master Plan
 
-> Status: Phases 1–9 are **done and verified** (see `docs/IMPLEMENTATION_PLAN.md`).
-> **Phase 10 (System monitoring and alerting) is next.** This file is the
+> Status: Phases 1–10 are **done and verified** (see `docs/IMPLEMENTATION_PLAN.md`).
+> **Phase 11 (Backup and restore) is next.** This file is the
 > authoritative copy of the project contract below.
 
 ---
@@ -72,8 +72,8 @@ Build a modular web application using Python 3, FastAPI, HTML, CSS and JavaScrip
 - **Phase 7**: Cloud and remote synchronization. *(done)*
 - **Phase 8**: Photo gallery and personal media libraries. *(done)*
 - **Phase 9**: Video playback and streaming. *(done)*
-- **Phase 10**: System monitoring and alerting. *(next)*
-- **Phase 11**: Backup and restore.
+- **Phase 10**: System monitoring and alerting. *(done)*
+- **Phase 11**: Backup and restore. *(next)*
 - **Phase 12**: Configuration export and import.
 - **Phase 13**: Syslog and comprehensive auditing.
 - **Phase 14**: Security hardening, deployment testing and documentation.

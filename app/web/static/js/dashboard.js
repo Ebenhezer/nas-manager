@@ -82,12 +82,53 @@ function renderHealth(health) {
   }
 }
 
+const SEVERITY_KIND = { warning: "warning", critical: "danger" };
+
+function alertItem(severity, message) {
+  const li = document.createElement("li");
+  li.className = "list-group-item d-flex gap-2 align-items-start";
+  const badge = document.createElement("span");
+  badge.className = `badge text-bg-${SEVERITY_KIND[severity] ?? "secondary"}`;
+  badge.textContent = severity;
+  const text = document.createElement("span");
+  text.textContent = message;
+  li.append(badge, text);
+  return li;
+}
+
+async function refreshAlerts() {
+  // Only rendered for users holding system:read.
+  const list = document.getElementById("alerts-list");
+  if (!list) return;
+  const [summary, page] = await Promise.all([
+    getJson("/api/v1/alerts/summary"),
+    getJson("/api/v1/alerts?state=firing&limit=5"),
+  ]);
+  const count = document.getElementById("alerts-count");
+  const total = summary.counts.firing + summary.synthetic.length;
+  const kind = summary.counts.critical || summary.synthetic.length ? "danger" : total ? "warning" : "success";
+  count.className = `badge text-bg-${kind} text-decoration-none`;
+  count.textContent = total ? `${total} firing` : "none";
+  const items = [
+    ...summary.synthetic.map((s) => alertItem(s.severity, s.message)),
+    ...page.items.map((a) => alertItem(a.severity, a.message)),
+  ];
+  if (!items.length) {
+    const li = document.createElement("li");
+    li.className = "list-group-item text-body-secondary";
+    li.textContent = "Everything looks fine.";
+    items.push(li);
+  }
+  list.replaceChildren(...items);
+}
+
 async function refresh() {
   const banner = document.getElementById("error-banner");
   try {
     const [summary, health] = await Promise.all([
       getJson("/api/v1/system/summary"),
       getJson("/api/v1/health", { allowStatuses: [503] }),
+      refreshAlerts(),
     ]);
     renderSummary(summary);
     renderHealth(health);

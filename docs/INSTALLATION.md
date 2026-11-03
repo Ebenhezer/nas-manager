@@ -130,6 +130,30 @@ ffmpeg -version | head -1   # the gallery's admin status shows the same line
 - **Transcoding** is CPU-heavy. The worker unit runs at `Nice=10` and one transcode at a time; tune `NAS_MEDIA_TRANSCODE_PRESET`, `_CRF`, `_MAX_HEIGHT`, `_THREADS` and cap the cache with `NAS_MEDIA_TRANSCODE_CACHE_MAX_BYTES`. Set `NAS_MEDIA_TRANSCODE_ENABLED=false` to serve only browser-compatible videos.
 - **Phones.** A backup app authenticates with a personal API token scoped `media:read` + `media:write`, asks `POST /api/v1/media/sync/lookup` which photos are already on the NAS, and uploads the rest (`POST /api/v1/media/upload` or resumable uploads with `target: "media"`); see `API.md`.
 
+### Monitoring and alerting (Phase 10)
+
+The worker does all monitoring: a host sample every `NAS_MONITOR_SAMPLE_SECONDS` (default 60 s, kept `NAS_MONITOR_HISTORY_DAYS`), service and RAID checks every `NAS_MONITOR_CHECK_SECONDS`, and SMART every `NAS_MONITOR_SMART_INTERVAL_MINUTES` (only with the helper enabled). Without the worker, the Monitoring page still shows live values, processes and RAID, but there is no history, no service/SMART state and no alerting. The Alerts page and the dashboard then show a "worker not running" banner.
+
+- **Services.** `NAS_MONITOR_SERVICES` lists the units to watch (default: `smbd`, `nmbd` and the three NAS Manager units). A unit that is not installed shows as `unknown` (not installed) and never alerts. The worker reads unit state with `systemctl show` over D-Bus as the unprivileged service account; the shipped unit allows this (`AF_UNIX`, `/run` readable). Check that it works on your host:
+
+  ```bash
+  sudo -u nas-manager systemctl show -p ActiveState smbd.service
+  ```
+
+- **Rules.** Ten built-in rules are created by the migration:
+  - disk usage above 80 % (warning) and above 90 % (critical) for 5 minutes
+  - memory above 90 % for 10 minutes
+  - swap above 50 % for 15 minutes
+  - load per core above 2 for 15 minutes
+  - RAID degraded, RAID member failed, SMART failed (critical, immediate)
+  - service down for 2 minutes
+  - helper unavailable for 10 minutes
+
+  Tune or disable them on the Alerts page, and add your own rules, for example one limited to a single disk path.
+- **Email.** On the Alerts page, add an *Email (SMTP)* channel with your provider's server, port 587 (STARTTLS) or 465 (TLS), the account and password, a sender and the recipients. Then click **Test**. Plain SMTP requires ticking *Allow unencrypted*.
+- **Webhook.** A *Webhook* channel POSTs JSON (format in `API.md`) to an HTTPS URL. This works with ntfy, Gotify, Home Assistant, Slack/Teams-compatible relays and so on. For an `Authorization: Bearer …` header, put the whole value in *Authorization header*. A *Signing secret* adds `X-NAS-Signature: sha256=<hex HMAC of the body>`.
+- Failed deliveries are retried with backoff (`NAS_ALERT_NOTIFY_MAX_ATTEMPTS`, default 5). After the last attempt the failure is written to the audit log (`alert.notification_failed`) and the worker log.
+
 Verify:
 
 ```bash

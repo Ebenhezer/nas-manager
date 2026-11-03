@@ -277,9 +277,19 @@ def parse_mdstat(text: str) -> list[RaidArray]:
     return [_parse_md_block(block) for block in _split_mdstat_blocks(text)]
 
 
+_SMARTCTL_FATAL_BITS = 0b11
+_SMARTCTL_DISK_FAILING = 0b1000
+
+
 def parse_smartctl(stdout: str, *, device: str, returncode: int) -> SmartData:
-    """Parse ``smartctl -j -H -A -i`` output; tolerate devices without SMART."""
-    if returncode != 0 or not stdout:
+    """Parse ``smartctl -j -H -A -i`` output; tolerate devices without SMART.
+
+    smartctl's exit status is a bit mask: bits 0-1 mean the command could not
+    run or the device could not be opened (no usable output), while the
+    higher bits report findings such as "disk failing" (bit 3) alongside
+    valid JSON, so those are parsed rather than treated as errors.
+    """
+    if returncode < 0 or returncode & _SMARTCTL_FATAL_BITS or not stdout:
         return SmartData(device=device, error=f"smartctl exited with status {returncode}")
     try:
         data = json.loads(stdout)
@@ -306,6 +316,8 @@ def parse_smartctl(stdout: str, *, device: str, returncode: int) -> SmartData:
 
     status = data.get("smart_status") or {}
     passed = status.get("passed")
+    if passed is None and returncode & _SMARTCTL_DISK_FAILING:
+        passed = False
     health = None if passed is None else ("passed" if passed else "failed")
     temperature = (data.get("temperature") or {}).get("current")
     capacity = (data.get("user_capacity") or {}).get("bytes")

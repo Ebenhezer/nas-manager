@@ -15,8 +15,8 @@ Status legend: **Done** (implemented and verified), **Next**, **Planned**.
 | 7 | Cloud and remote synchronization (+ sync worker) | **Done** |
 | 8 | Photo gallery and personal media libraries | **Done** |
 | 9 | Video playback and streaming | **Done** |
-| 10 | System monitoring and alerting | **Next** |
-| 11 | Backup and restore | Planned |
+| 10 | System monitoring and alerting | **Done** |
+| 11 | Backup and restore | **Next** |
 | 12 | Configuration export and import | Planned |
 | 13 | Syslog and comprehensive auditing | Planned |
 | 14 | Security hardening, deployment testing, documentation | Planned |
@@ -192,6 +192,14 @@ Delivered:
 35. **ffmpeg is quarantined in one module.** Fixed argument lists, no shell, `file:` inputs/outputs, minimal environment, timeouts and kill-on-stop; ffprobe runs on upload (web) and scan (worker), posters and transcodes only in the worker on their own single-thread pools at `Nice=10`. Without ffmpeg, videos still index and download.
 36. **Progressive MP4, not HLS.** Browser-compatible originals stream as they are with HTTP Range; everything else gets one cached H.264/AAC `+faststart` MP4, which `<video>` can seek with Range as well. Adaptive bitrate streaming was judged not worth its complexity and storage for a home NAS.
 
+37. **The worker observes; the web process reads.** Samples, service/RAID/SMART checks, rule evaluation and notification delivery all run in the worker, each on its own single-thread pool, so a slow `systemctl`, SMART read or SMTP server never delays a tick. Pages read stored snapshots (`monitor_checks`, `metric_samples`). Only cheap, unprivileged values (the live summary, processes, `/proc/mdstat`) are read per request. The single exception is the channel "Test" button, which sends synchronously so the administrator sees the result.
+38. **No new root operations for monitoring.** Service state comes from unprivileged `systemctl show`, RAID from the world-readable `/proc/mdstat`, and SMART from the helper's existing `disk.list`/`disk.smart`. The helper allowlist is unchanged.
+39. **Alerts are a small state machine with hysteresis.** The engine is a pure function (rules × observations × open alerts → transitions). The rules are: pending until `duration_seconds`, then firing; a pending alert that clears is dropped; a firing threshold alert resolves only 5 % past the threshold; an unobserved target is kept for an hour; `unknown` checks never open or resolve anything. Messages describe the breach and are frozen on resolution.
+40. **Notifications go through an outbox.** A firing or resolution queues one row per matching channel (`min_severity`, `send_resolved`). Delivery retries with exponential backoff, capped at one hour, up to `NAS_ALERT_NOTIFY_MAX_ATTEMPTS`, and the final failure is audited. Disabling a rule closes its alerts silently. A threshold or target change is left to the next evaluation, which resolves and notifies.
+41. **Reuse `system:read` / `system:write`.** These tokens already existed (admin both, operator read) and were unused, so Phase 10 needed no permission migration. Channel credentials follow the Phase 7 rules: one Fernet token, names-only responses and audit details, session-only create/update/test.
+42. **No command lines in the process list.** They routinely carry secrets, and the list is visible to operators.
+43. **A dead worker is reported, not notified.** The web process adds a synthetic `worker_offline` entry to the alert summary from the heartbeat. Notifying about the worker's own death would need an independent watchdog, which is out of scope.
+
 ## Known limitations
 
 - The management UI (including the gallery and video player) was exercised via TestClient and curl, not a real browser.
@@ -200,7 +208,7 @@ Delivered:
 - The per-IP login limiter is in-process (single process; resets on restart). The account lockout is persistent in the database.
 - The bearer-failure throttle and the per-upload resumable lock are in-process; a multi-process deployment needs shared state for both.
 - The sync journal records only changes made through the application; edits over Samba or directly on disk are not journaled (clients should re-list periodically).
-- Monitoring is limited to CPU, memory, swap, disk-usage entries and network byte counters; per-disk and RAID *discovery* exists (Phase 5) but there are no processes, services, RAID health curation or alerting yet (Phase 10).
+- Monitoring (Phase 10): a stopped worker cannot notify, including about itself; the UI shows it. History is sampled, by default once a minute, and kept 7 days, so there is no per-second resolution or long-term trending. Disk usage is sampled for the data directory and the managed file roots only (other mounts appear in Disks). Process CPU % is measured between page refreshes. SMART polling needs the helper. Only email and webhook channels exist (no SMS or push app). Alert rules are global, with no per-user subscriptions or quiet hours. Deleting a channel drops notifications still queued for it.
 - The sync worker is a single process (`NAS_WORKER_CONCURRENCY` threads); several workers on one database are safe (atomic claims, leases) but were only exercised as one process. Resumable-upload expiry and file-journal pruning still run on request; media journal and cache pruning run in the worker.
 - Remote sync limitations (Phase 7): empty directories are not synced; renames are seen as a new file plus a deletion (so with `delete_policy=ignore` the old name stays on the other side); files changed outside the sync between scan and transfer are skipped until the next run; FTP needs `MLSD`; Google Drive skips Google-native documents and duplicate names; there is no bandwidth limit, no per-file size cap and no partial-file resume for remote transfers (an interrupted file restarts); the credentials key cannot be rotated yet.
 - `smbd` reload is performed by the Phase 5 helper when `NAS_HELPER_ENABLED=true`; without the helper the web process still writes where it can and reports `reload_required`.
@@ -391,3 +399,55 @@ Delivered:
 - ffprobe/ffmpeg **under the systemd sandboxes** (`MemoryDenyWriteExecute`, `SystemCallFilter`, `Nice=`) were not run on a real host.
 - Long and large videos (hours, 4K, multi-gigabyte) were not transcoded; only synthetic few-second clips. Transcode timing and cache sizing on real hardware are unmeasured.
 - Only ffmpeg 6.1.1 was exercised.
+
+## Phase 10: completed
+
+Delivered:
+
+- **Monitoring package** (`app/services/monitoring/`, replacing `monitoring.py`; the existing imports are unchanged):
+  - `processes`: top N by CPU or memory, **never command lines**.
+  - `services`: unprivileged `systemctl show` for `NAS_MONITOR_SERVICES`, with validated unit names, `--`, no shell, a timeout, and `unknown` instead of errors.
+  - `checks`: RAID from `/proc/mdstat`; SMART and helper liveness through the existing helper operations; one stored `monitor_checks` row per target.
+  - `samples`: host samples every `NAS_MONITOR_SAMPLE_SECONDS`, downsampled history for 1h/6h/24h/7d, network rates and reboot-safe counters, pruning after `NAS_MONITOR_HISTORY_DAYS`.
+  - `rules`: the pure alert engine (pending → firing after a duration, hysteresis on resolve, stale targets, `unknown` ignored).
+  - `alerts`: rule CRUD, alert state, acknowledgement and outbox queueing.
+  - `channels`: email and webhook validation, with Fernet-encrypted secrets.
+  - `notify`: SMTP (STARTTLS/TLS, verified certificates) and webhooks (HTTPS, no redirects, HMAC-SHA256 `X-NAS-Signature`, optional `Authorization`), with retries and exponential backoff, and audited final failures.
+- **Worker:** two new single-thread pools. *monitor* takes samples, runs checks and evaluates rules. *notify* delivers. Hourly pruning now also covers samples and resolved alerts.
+- **Migration `0010`:** `metric_samples`, `monitor_checks`, `alert_rules` (10 built-in rules), `alerts`, `alert_channels` and `alert_notifications`. No new permissions: `system:read` (admin, operator) and `system:write` (admin) are reused.
+- **API:**
+  - `/monitoring/{overview,history,processes,services,raid,checks}`
+  - `/alerts` (list, summary, acknowledge)
+  - `/alert-rules` (CRUD; built-in rules cannot be deleted)
+  - `/alert-channels` (CRUD + test; session only for create/update/test)
+  - `/info` features `monitoring` and `alerting`
+  - a synthetic `worker_offline` entry in the summary.
+- **UI:** a **Monitoring** page (inline-SVG sparklines, services, RAID, SMART and helper, process table) and an **Alerts** page (active and resolved alerts, acknowledge, rule editor, email/webhook channel forms with test). The dashboard gains an "Active alerts" card for `system:read`. Navigation links are permission-gated, and everything stays CSP-compatible.
+- **Config:** `NAS_MONITOR_*`, `NAS_SYSTEMCTL_PATH` and `NAS_ALERT_*`, in both env templates. The worker unit is annotated with the sandbox requirements (`AF_UNIX`; no `ProtectProc`).
+- **Fixes:**
+  - `parse_smartctl` (Phase 5) treated any non-zero smartctl exit as an error. smartctl's exit status is a bit mask, and bit 3 ("disk failing") comes with valid JSON, so a failing disk was reported as "error". It is now parsed, and the disk shows as `failed`.
+  - Two bugs found by the live run were also fixed: the reserved `message` key in a log `extra`, and resolution messages being rewritten as "above the threshold".
+- **Postman collection** `docs/postman/nas-manager-phase10.postman_collection.json` (25 requests), generated from the same definition as the live replay runner.
+
+### Verification (executed in this workspace, Python 3.12.3, Ubuntu 24.04 on WSL2 with systemd running)
+
+| Check | Result |
+|-------|--------|
+| `pytest` | 661 passed (563 after Phase 9; +98 in `test_alert_rules.py`, `test_alerting.py`, `test_monitoring_api.py`, plus additions to `test_monitoring.py`, `test_worker.py`, `test_dashboard.py`, `test_migrations.py`) |
+| Coverage (`app/`) | 91 % overall; monitoring API routers 100 %, `rules` 99 %, `samples`/`processes` 100 %, `alerts` 96 %, `notify` 95 %, `services` 95 %, `checks` 94 %, `channels` 88 %, `worker/runner` 90 % |
+| `ruff check` / `ruff format --check` / `mypy` (strict, 186 source files) | clean |
+| Migrations | the CLI on a fresh directory applies `0001`–`0010`; `downgrade 0009` and back up; `alembic check` reports no drift; the built-in rules are seeded and re-seeded |
+| Engine | pending/firing/drop/resolve timing, hysteresis in both directions, per-target tracking, a rule target narrowing, stale targets, `unknown` checks, condition metrics, and messages frozen on resolution |
+| Outbox and transports | per-channel filters (`min_severity`, `send_resolved`, disabled), silent rules, retry → backoff → failed + audit; fake SMTP (STARTTLS order, login, implicit TLS, auth failure, unreachable host, plain refused, subject folding); webhooks over `MockTransport` (signature, `Authorization`, no redirect following, network error, plain HTTP refused) |
+| API and permissions | anonymous 401, viewer 403, operator read-only (writes and acknowledge 403), admin full; secrets never in responses, the stored config or audit details; API tokens refused on channel create/update/test; validation errors |
+| Live run (`python -m app` + `python -m app.worker` + a loopback webhook receiver, scratch data dir, 10 s sample/check interval) | the 25-request replay passed twice in a row: history filled by the worker, processes without command lines, services read through the real `systemctl` (here: not installed → `unknown`), a 1 % disk rule fired, signed `test`/`firing`/`resolved` webhooks were received with valid HMACs, acknowledge worked, raising the threshold resolved the alert and notified; `/`, `/monitoring` and `/alerts` returned 200; the signing secret was absent from the DB, WAL and logs; no ERROR/CRITICAL lines or tracebacks; the worker exited cleanly on SIGTERM. `unit_states` also parsed real units (`systemd-journald`, `dbus.socket` → active) |
+| systemd | `systemd-analyze verify` on the worker unit reports only the missing `/opt/nas-manager/.venv` (expected here) and the pre-existing mode bits of `nas-manager.service` |
+
+### Not verified
+
+- **No real browser**: the Monitoring and Alerts pages and the dashboard card were checked over HTTP only (rendering, element IDs, no inline code). The JavaScript was not syntax-checked, because there is no Node runtime here.
+- **No real SMTP server or provider**: email was tested against a fake `smtplib`. Webhooks went to a loopback receiver, not to ntfy, Gotify or Slack.
+- `systemctl show` was run as root in WSL, **not as the unprivileged `nas-manager` user inside the sandboxed unit**. Run the check in `INSTALLATION.md` on the target host.
+- **No real RAID array or SMART hardware**: mdstat and smartctl came from fixtures, and SMART from a mocked helper.
+- PostgreSQL is still not exercised.
+

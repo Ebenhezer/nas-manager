@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -222,3 +223,144 @@ def test_worker_refuses_outdated_schema(tmp_path: Path) -> None:
     )
     assert result.returncode == 1
     assert "alembic upgrade head" in result.stdout + result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Monitoring and alerting (Phase 10)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def quiet_host(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """No systemctl, an empty mdstat: the monitor runs without touching the host."""
+    from app.services.monitoring import checks
+
+    monkeypatch.setattr(shutil, "which", lambda name, path=None: None)
+    mdstat = tmp_path / "mdstat"
+    mdstat.write_text("Personalities :\nunused devices: <none>\n")
+    monkeypatch.setattr(checks, "MDSTAT_PATH", mdstat)
+
+
+def test_monitor_pass_samples_checks_and_waits_for_its_interval(
+    worker: Worker, db: Database, quiet_host: None
+) -> None:
+    from app.models.monitoring import MetricSample, MonitorCheck
+
+    worker.tick()
+    worker.wait_idle()
+    with db.session_factory() as session:
+        assert len(session.execute(select(MetricSample)).all()) == 1
+        services = session.execute(select(MonitorCheck)).scalars().all()
+        assert {row.status for row in services} == {"unknown"}
+        assert len(services) == 5  # the default NAS_MONITOR_SERVICES
+    worker.tick()  # the next sample is not due yet
+    worker.wait_idle()
+    with db.session_factory() as session:
+        assert len(session.execute(select(MetricSample)).all()) == 1
+
+
+def test_monitor_disabled_does_nothing(
+    migrated_settings: Settings, db: Database, quiet_host: None
+) -> None:
+    from app.models.monitoring import MetricSample
+
+    worker = Worker(
+        migrated_settings.model_copy(update={"monitor_enabled": False}), db, owner="off"
+    )
+    worker.tick()
+    worker.wait_idle()
+    with db.session_factory() as session:
+        assert session.execute(select(MetricSample)).first() is None
+
+
+def test_fired_alert_is_delivered_by_the_notify_pool(
+    worker: Worker,
+    db: Database,
+    migrated_settings: Settings,
+    quiet_host: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx2
+
+    from app.core.secrets import CredentialCipher
+    from app.models import User
+    from app.models.monitoring import Alert, AlertNotification, AlertRule
+    from app.services.monitoring import channels, notify
+
+    received: list[httpx2.Request] = []
+
+    def server(request: httpx2.Request) -> httpx2.Response:
+        received.append(request)
+        return httpx2.Response(200)
+
+    monkeypatch.setattr(notify, "WEBHOOK_TRANSPORT", httpx2.MockTransport(server))
+    with db.session_factory() as session:
+        admin = User(username="root-admin", password_hash="x")
+        session.add(admin)
+        session.flush()
+        channels.create_channel(
+            session,
+            values={"name": "hook", "kind": "webhook", "config": {"url": "https://h.example/x"}},
+            cipher=CredentialCipher.from_settings(migrated_settings),
+            actor=admin,
+        )
+        for rule in session.execute(select(AlertRule)).scalars():
+            rule.enabled = rule.name == "Disk usage high"
+            rule.threshold = 0.0
+            rule.duration_seconds = 0
+        session.commit()
+
+    worker.tick()  # sample + evaluation -> firing alert, notification queued
+    worker.wait_idle()
+    worker.tick()  # the queued notification is handed to the notify pool
+    worker.wait_idle()
+    with db.session_factory() as session:
+        assert session.execute(select(Alert.state)).scalars().all()
+        assert {a.state for a in session.execute(select(Alert)).scalars()} == {"firing"}
+        statuses = {n.status for n in session.execute(select(AlertNotification)).scalars()}
+        assert statuses == {"sent"}
+    assert received and received[0].url.host == "h.example"
+
+
+def test_monitor_failures_are_isolated(
+    worker: Worker,
+    db: Database,
+    quiet_host: None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from app.models.monitoring import MonitorCheck
+    from app.services.monitoring import samples
+
+    def broken(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("psutil exploded")
+
+    monkeypatch.setattr(samples, "record_sample", broken)
+    worker.tick()
+    worker.wait_idle()
+    assert "metric sample failed" in caplog.text
+    with db.session_factory() as session:
+        # The checks still ran after the failed sample.
+        assert session.execute(select(MonitorCheck)).first() is not None
+
+
+def test_prune_covers_samples(worker: Worker, db: Database, quiet_host: None) -> None:
+    from app.models.monitoring import MetricSample
+
+    with db.session_factory() as session:
+        session.add(
+            MetricSample(
+                sampled_at=utcnow_naive() - timedelta(days=30),
+                cpu_percent=1.0,
+                memory_percent=1.0,
+                swap_percent=0.0,
+                net_bytes_sent=0,
+                net_bytes_recv=0,
+            )
+        )
+        session.commit()
+    worker.tick()
+    worker.wait_idle()
+    with db.session_factory() as session:
+        stamps = session.execute(select(MetricSample.sampled_at)).scalars().all()
+        assert stamps and all(s > utcnow_naive() - timedelta(days=1) for s in stamps)

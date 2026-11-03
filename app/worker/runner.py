@@ -13,8 +13,12 @@ under the same unprivileged account as the web application. Each tick it:
    single-thread pool, so photos never take a sync slot, and video
    transcodes (Phase 9) on a third single-thread pool, so a long transcode
    never delays scans or thumbnails, and
-7. occasionally prunes old run history, the media journal and orphaned
-   thumbnail cache files.
+7. runs the monitor pass (Phase 10: host sample, service/RAID/helper/SMART
+   checks, alert rule evaluation) on its own single-thread pool when due,
+   and delivers queued alert notifications on another, so a slow SMTP
+   server or ``smartctl`` never delays a tick, and
+8. occasionally prunes old run history, the media journal, orphaned
+   thumbnail cache files, old metric samples and resolved alerts.
 
 On SIGTERM/SIGINT it stops claiming, asks running jobs to stop after their
 current file and waits for them.
@@ -40,6 +44,10 @@ from app.models import MediaLibrary, MediaTranscode, SyncRun
 from app.services import remote_sync
 from app.services.media import jobs as media_jobs
 from app.services.media import transcode
+from app.services.monitoring import alerts as monitor_alerts
+from app.services.monitoring import checks as monitor_checks
+from app.services.monitoring import notify as monitor_notify
+from app.services.monitoring import samples as monitor_samples
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +69,14 @@ class Worker:
         self.media_future: Future[None] | None = None
         self.transcode_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="transcode")
         self.transcode_future: Future[None] | None = None
+        self.monitor_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="monitor")
+        self.monitor_future: Future[None] | None = None
+        self.notify_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="notify")
+        self.notify_future: Future[None] | None = None
+        # Monotonic deadlines; 0 means "due on the first tick".
+        self._next_sample = 0.0
+        self._next_check = 0.0
+        self._next_smart = 0.0
         self._last_prune = 0.0
 
     def tick(self) -> None:
@@ -87,6 +103,7 @@ class Worker:
                 self.running[run.job_id] = self.pool.submit(self._execute, run.id)
             self._media_tick(session, now)
             self._transcode_tick(session, now)
+            self._monitor_tick(session, now)
             if time.monotonic() - self._last_prune >= _PRUNE_INTERVAL_SECONDS:
                 self._last_prune = time.monotonic()
                 pruned = remote_sync.prune_runs(session, self.settings)
@@ -95,6 +112,13 @@ class Worker:
                 media_pruned = media_jobs.prune(session, self.settings)
                 if any(media_pruned.values()):
                     logger.info("pruned media journal and cache", extra=media_pruned)
+                samples_pruned = monitor_samples.prune(session, self.settings)
+                alerts_pruned = monitor_alerts.prune(session, self.settings)
+                if samples_pruned or alerts_pruned:
+                    logger.info(
+                        "pruned metric samples and resolved alerts",
+                        extra={"samples": samples_pruned, "alerts": alerts_pruned},
+                    )
 
     def _media_tick(self, session: Session, now: datetime) -> None:
         lease = self.settings.media_scan_lease_seconds
@@ -125,6 +149,82 @@ class Worker:
         if row is not None:
             logger.info("transcode started", extra={"item_id": row.item_id})
             self.transcode_future = self.transcode_pool.submit(self._transcode, row.id)
+
+    def _monitor_tick(self, session: Session, now: datetime) -> None:
+        if not self.settings.monitor_enabled or self.stop.is_set():
+            return
+        clock = time.monotonic()
+        monitor_busy = self.monitor_future is not None and not self.monitor_future.done()
+        if not monitor_busy:
+            sample = clock >= self._next_sample
+            check = clock >= self._next_check
+            smart = (
+                check
+                and self.settings.monitor_smart_interval_minutes > 0
+                and clock >= self._next_smart
+            )
+            if sample:
+                self._next_sample = clock + self.settings.monitor_sample_seconds
+            if check:
+                self._next_check = clock + self.settings.monitor_check_seconds
+            if smart:
+                self._next_smart = clock + 60 * self.settings.monitor_smart_interval_minutes
+            if sample or check:
+                self.monitor_future = self.monitor_pool.submit(
+                    self._monitor, sample=sample, check=check, smart=smart
+                )
+        notify_busy = self.notify_future is not None and not self.notify_future.done()
+        if not notify_busy and monitor_notify.pending_count(session, now):
+            self.notify_future = self.notify_pool.submit(self._notify)
+
+    def _monitor(self, *, sample: bool, check: bool, smart: bool) -> None:
+        """One monitor pass; each step is isolated so one failure never hides the rest."""
+        with self.db.session_factory() as session:
+            now = utcnow_naive()
+            row = None
+            if sample:
+                try:
+                    row, _ = monitor_samples.record_sample(session, self.settings, now)
+                except Exception:
+                    session.rollback()
+                    logger.exception("metric sample failed")
+            if check:
+                try:
+                    monitor_checks.run_service_checks(session, self.settings, now)
+                except Exception:
+                    session.rollback()
+                    logger.exception("monitor check failed", extra={"check": "services"})
+                try:
+                    monitor_checks.run_raid_checks(session, now)
+                except Exception:
+                    session.rollback()
+                    logger.exception("monitor check failed", extra={"check": "raid"})
+                try:
+                    helper_up = monitor_checks.run_helper_check(session, self.settings, now)
+                    if smart and helper_up:
+                        monitor_checks.run_smart_checks(session, self.settings, now)
+                except Exception:
+                    session.rollback()
+                    logger.exception("monitor check failed", extra={"check": "helper/smart"})
+            try:
+                changed = monitor_alerts.evaluate(session, self.settings, now, row)
+            except Exception:
+                session.rollback()
+                logger.exception("alert evaluation failed")
+            else:
+                if changed:
+                    logger.info(
+                        "alerts changed",
+                        extra={
+                            "transitions": [f"{t.action}:{t.rule_id}:{t.target}" for t in changed]
+                        },
+                    )
+
+    def _notify(self) -> None:
+        with self.db.session_factory() as session:
+            result = monitor_notify.deliver_due(session, self.settings, self.cipher, stop=self.stop)
+            if any(result.values()):
+                logger.info("alert notifications processed", extra=result)
 
     def _transcode(self, row_id: int) -> None:
         with self.db.session_factory() as session:
@@ -171,6 +271,10 @@ class Worker:
             self.media_future.result()
         if self.transcode_future is not None:
             self.transcode_future.result()
+        if self.monitor_future is not None:
+            self.monitor_future.result()
+        if self.notify_future is not None:
+            self.notify_future.result()
 
     def run_forever(self) -> None:
         logger.info("sync worker started", extra={"owner": self.owner})
@@ -184,4 +288,6 @@ class Worker:
         self.pool.shutdown(wait=True)
         self.media_pool.shutdown(wait=True)
         self.transcode_pool.shutdown(wait=True)
+        self.monitor_pool.shutdown(wait=True)
+        self.notify_pool.shutdown(wait=True)
         logger.info("sync worker stopped")

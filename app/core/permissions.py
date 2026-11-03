@@ -43,7 +43,8 @@ ROLE_DESCRIPTIONS: dict[str, str] = {
     "admin": "Full access to every managed resource, including user and group management.",
     "operator": (
         "Read access to users, groups, roles, audit log, system, settings, public upload usage"
-        ", API token metadata and remote sync status (never remote credentials)"
+        ", API token metadata, remote sync status (never remote credentials)"
+        " and system monitoring and alerts (view only)"
         "; their own photo and video library."
     ),
     "viewer": "Read-only access to the dashboard; their own photo and video library.",

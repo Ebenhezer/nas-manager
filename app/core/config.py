@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Self
@@ -10,6 +11,10 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _GIB = 1024**3
+
+# systemd unit names the monitor may query: never an option (no leading
+# "-"), no path separators, a known unit type suffix.
+UNIT_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9@._:-]{0,200}\.(service|socket|timer|mount)")
 
 
 class Settings(BaseSettings):
@@ -218,6 +223,29 @@ class Settings(BaseSettings):
     media_transcode_cache_max_bytes: int = Field(default=20 * _GIB, ge=0)
     media_transcode_lease_seconds: int = Field(default=600, ge=30, le=86400)
 
+    # ------------------------------------------------------------------
+    # System monitoring and alerting (Phase 10). The worker samples host
+    # metrics every NAS_MONITOR_SAMPLE_SECONDS (kept NAS_MONITOR_HISTORY_DAYS),
+    # checks the systemd units in NAS_MONITOR_SERVICES, RAID arrays and
+    # (through the privileged helper) SMART health, evaluates the alert
+    # rules and delivers notifications. The web process only reads.
+    # ------------------------------------------------------------------
+    monitor_enabled: bool = True
+    monitor_sample_seconds: int = Field(default=60, ge=10, le=3600)
+    monitor_check_seconds: int = Field(default=60, ge=10, le=3600)
+    monitor_history_days: int = Field(default=7, ge=1, le=365)
+    monitor_services: str = (
+        "smbd.service,nmbd.service,nas-manager.service,"
+        "nas-manager-worker.service,nas-manager-helper.service"
+    )
+    # 0 disables SMART polling (SMART reads need the helper).
+    monitor_smart_interval_minutes: int = Field(default=30, ge=0, le=7 * 24 * 60)
+    monitor_process_limit: int = Field(default=25, ge=1, le=500)
+    systemctl_path: Path | None = None
+    alert_retention_days: int = Field(default=90, ge=1, le=3650)
+    alert_notify_max_attempts: int = Field(default=5, ge=1, le=50)
+    alert_notify_timeout_seconds: int = Field(default=15, ge=1, le=300)
+
     @field_validator(
         "data_dir",
         "log_dir",
@@ -230,6 +258,7 @@ class Settings(BaseSettings):
         "media_cache_dir",
         "ffmpeg_path",
         "ffprobe_path",
+        "systemctl_path",
     )
     @classmethod
     def _absolute(cls, value: Path | None) -> Path | None:
@@ -263,6 +292,17 @@ class Settings(BaseSettings):
         if not value.startswith(("https://", "http://")) or any(c in value for c in "?#"):
             raise ValueError("NAS_PUBLIC_BASE_URL must be an http(s) URL without query/fragment")
         return value
+
+    @field_validator("monitor_services")
+    @classmethod
+    def _monitor_services(cls, value: str) -> str:
+        units = [part.strip() for part in value.split(",") if part.strip()]
+        for unit in units:
+            if not UNIT_NAME_RE.fullmatch(unit):
+                raise ValueError(f"NAS_MONITOR_SERVICES: invalid systemd unit name: {unit!r}")
+        if len(units) > 64:
+            raise ValueError("NAS_MONITOR_SERVICES: at most 64 units")
+        return ",".join(dict.fromkeys(units))
 
     @model_validator(mode="after")
     def _check_cookies_and_argon2(self) -> Self:
@@ -344,6 +384,10 @@ class Settings(BaseSettings):
             if token and token.isdigit() and int(token) >= 0:
                 uids.add(int(token))
         return frozenset(uids)
+
+    @property
+    def monitor_service_list(self) -> list[str]:
+        return [unit for unit in self.monitor_services.split(",") if unit]
 
     @property
     def resolved_database_url(self) -> str:

@@ -71,6 +71,8 @@ def test_management_pages_require_authentication(client: TestClient) -> None:
         "/remote-sync",
         "/gallery",
         "/videos",
+        "/monitoring",
+        "/alerts",
     ]:
         response = client.get(path, follow_redirects=False)
         assert response.status_code == 302, path
@@ -100,6 +102,8 @@ def test_dashboard_has_no_inline_script_or_style(page: TestClient) -> None:
         "/remote-sync",
         "/gallery",
         "/videos",
+        "/monitoring",
+        "/alerts",
     ],
 )
 def test_phase3_pages_have_no_inline_script_or_style(page: TestClient, path: str) -> None:
@@ -150,6 +154,54 @@ def test_gallery_page_has_every_element_its_script_uses(page: TestClient) -> Non
 
 
 @pytest.mark.parametrize(
+    ("path", "script"),
+    [("/monitoring", "monitoring.js"), ("/alerts", "alerts.js"), ("/", "dashboard.js")],
+)
+def test_phase10_pages_have_every_element_their_script_uses(
+    page: TestClient, path: str, script: str
+) -> None:
+    """The admin view renders every element the page script looks up by id."""
+    import re
+
+    response = page.get(path)
+    assert response.status_code == 200
+    html = response.text
+    source = (STATIC_DIR / "js" / script).read_text()
+    ids = set(re.findall(r'getElementById\("([a-z0-9-]+)"\)', source))
+    assert ids, "expected getElementById lookups"
+    missing = sorted(i for i in ids if f'id="{i}"' not in html)
+    assert missing == []
+    assert 'href="/monitoring"' in html and 'href="/alerts"' in html  # nav links
+
+
+def test_viewer_dashboard_has_no_alert_card(app: object, admin_user: object) -> None:
+    """Without system:read the dashboard neither shows nor polls alerts."""
+    from fastapi import FastAPI
+
+    from app.services.users_service import create_user
+    from tests.conftest import ADMIN_PASSWORD, login
+
+    assert isinstance(app, FastAPI)
+    with app.state.db.session_factory() as session:
+        create_user(
+            session,
+            username="vera",
+            password=ADMIN_PASSWORD,
+            display_name=None,
+            email=None,
+            role_names=["viewer"],
+            groups=[],
+            settings=app.state.settings,
+            actor=admin_user,  # type: ignore[arg-type]
+        )
+    with TestClient(app) as viewer:
+        login(viewer, "vera", ADMIN_PASSWORD)
+        html = viewer.get("/").text
+    assert 'id="alerts-list"' not in html
+    assert 'href="/monitoring"' not in html
+
+
+@pytest.mark.parametrize(
     "path",
     [
         "/static/css/app.css",
@@ -170,6 +222,8 @@ def test_gallery_page_has_every_element_its_script_uses(page: TestClient) -> Non
         "/static/js/public_upload.js",
         "/static/js/remote_sync.js",
         "/static/js/gallery.js",
+        "/static/js/monitoring.js",
+        "/static/js/alerts.js",
         "/static/vendor/bootstrap/bootstrap.min.css",
         "/static/vendor/bootstrap/bootstrap.bundle.min.js",
     ],

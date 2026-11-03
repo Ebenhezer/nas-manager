@@ -15,6 +15,14 @@ from app.models.media import (
     MediaTranscode,
     media_library_groups,
 )
+from app.models.monitoring import (
+    Alert,
+    AlertChannel,
+    AlertNotification,
+    AlertRule,
+    MetricSample,
+    MonitorCheck,
+)
 from app.models.public_upload import PublicUploadFile, PublicUploadQuota
 from app.models.remote import (
     RemoteConnection,
@@ -30,6 +38,10 @@ from app.models.upload_session import UploadSession
 from app.models.user import User
 
 __all__ = [
+    "Alert",
+    "AlertChannel",
+    "AlertNotification",
+    "AlertRule",
     "ApiToken",
     "AppSetting",
     "AuditEvent",
@@ -42,6 +54,8 @@ __all__ = [
     "MediaItem",
     "MediaLibrary",
     "MediaTranscode",
+    "MetricSample",
+    "MonitorCheck",
     "PublicUploadFile",
     "PublicUploadQuota",
     "RemoteConnection",

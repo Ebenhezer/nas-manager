@@ -1,0 +1,256 @@
+{% extends "base.html" %}
+{% block title %}Alerts · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
+  <h1 class="h3 mb-0">Alerts</h1>
+  <span id="summary-badge" class="badge text-bg-secondary">checking…</span>
+</div>
+<div id="error-banner" class="alert alert-danger d-none" role="alert"></div>
+<div id="info-banner" class="alert alert-info d-none" role="status"></div>
+<div id="synthetic-list"></div>
+
+<div id="alerts-root" data-can-write="{{ 'true' if can('system:write') else 'false' }}">
+  <div class="card mb-4">
+    <div class="card-header">Active alerts</div>
+    <div class="table-responsive">
+      <table class="table table-striped align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Severity</th>
+            <th>State</th>
+            <th>Alert</th>
+            <th>Since</th>
+            <th>Acknowledged</th>
+            {% if can('system:write') %}<th class="text-end">Actions</th>{% endif %}
+          </tr>
+        </thead>
+        <tbody id="active-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card mb-4">
+    <div class="card-header">Recently resolved</div>
+    <div class="table-responsive">
+      <table class="table table-sm table-striped align-middle mb-0">
+        <thead>
+          <tr><th>Severity</th><th>Alert</th><th>Fired</th><th>Resolved</th></tr>
+        </thead>
+        <tbody id="history-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card mb-4">
+    <div class="card-header d-flex align-items-center justify-content-between">
+      <span>Rules</span>
+      {% if can('system:write') %}
+      <button type="button" class="btn btn-sm btn-primary" id="add-rule">Add rule</button>
+      {% endif %}
+    </div>
+    {% if can('system:write') %}
+    <form id="rule-form" class="card-body border-bottom d-none" novalidate>
+      <h2 class="h6" id="rule-form-title">New rule</h2>
+      <div class="row g-2">
+        <div class="col-12 col-md-4">
+          <label class="form-label" for="rule-name">Name</label>
+          <input class="form-control" id="rule-name" name="name" maxlength="64" required>
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label" for="rule-metric">Metric</label>
+          <select class="form-select" id="rule-metric" name="metric">
+            <option value="cpu_percent">CPU %</option>
+            <option value="memory_percent">Memory %</option>
+            <option value="swap_percent">Swap %</option>
+            <option value="load_per_core">Load per core</option>
+            <option value="disk_percent">Disk usage %</option>
+            <option value="raid_degraded">RAID degraded</option>
+            <option value="raid_failed_member">RAID member failed</option>
+            <option value="smart_failed">SMART failed</option>
+            <option value="service_down">Service down</option>
+            <option value="helper_unavailable">Helper unavailable</option>
+          </select>
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label" for="rule-target">Target <span class="text-body-secondary small">(empty = all)</span></label>
+          <input class="form-control" id="rule-target" name="target" maxlength="255" placeholder="/srv/data, md0, smbd.service…">
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label" for="rule-comparison">When</label>
+          <select class="form-select" id="rule-comparison" name="comparison">
+            <option value="gt">above</option>
+            <option value="lt">below</option>
+          </select>
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label" for="rule-threshold">Threshold</label>
+          <input class="form-control" id="rule-threshold" name="threshold" type="number" step="any" min="0">
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label" for="rule-duration">For (seconds)</label>
+          <input class="form-control" id="rule-duration" name="duration_seconds" type="number" min="0" value="300">
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label" for="rule-severity">Severity</label>
+          <select class="form-select" id="rule-severity" name="severity">
+            <option value="warning">warning</option>
+            <option value="critical">critical</option>
+          </select>
+        </div>
+        <div class="col-12 col-md-4 d-flex align-items-end gap-3">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="rule-enabled" name="enabled" checked>
+            <label class="form-check-label" for="rule-enabled">Enabled</label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="rule-notify" name="notify" checked>
+            <label class="form-check-label" for="rule-notify">Notify</label>
+          </div>
+        </div>
+      </div>
+      <div class="mt-3 d-flex gap-2">
+        <button type="submit" class="btn btn-primary btn-sm">Save rule</button>
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="rule-cancel">Cancel</button>
+      </div>
+    </form>
+    {% endif %}
+    <div class="table-responsive">
+      <table class="table table-striped align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Condition</th>
+            <th>For</th>
+            <th>Severity</th>
+            <th>Status</th>
+            <th>Open</th>
+            {% if can('system:write') %}<th class="text-end">Actions</th>{% endif %}
+          </tr>
+        </thead>
+        <tbody id="rules-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header d-flex align-items-center justify-content-between">
+      <span>Notification channels</span>
+      {% if can('system:write') %}
+      <button type="button" class="btn btn-sm btn-primary" id="add-channel">Add channel</button>
+      {% endif %}
+    </div>
+    {% if can('system:write') %}
+    <form id="channel-form" class="card-body border-bottom d-none" novalidate autocomplete="off">
+      <h2 class="h6" id="channel-form-title">New channel</h2>
+      <div class="row g-2">
+        <div class="col-12 col-md-4">
+          <label class="form-label" for="channel-name">Name</label>
+          <input class="form-control" id="channel-name" name="name" maxlength="64" required>
+        </div>
+        <div class="col-6 col-md-4">
+          <label class="form-label" for="channel-kind">Type</label>
+          <select class="form-select" id="channel-kind" name="kind">
+            <option value="email">Email (SMTP)</option>
+            <option value="webhook">Webhook (HTTP POST)</option>
+          </select>
+        </div>
+        <div class="col-6 col-md-4">
+          <label class="form-label" for="channel-severity">Minimum severity</label>
+          <select class="form-select" id="channel-severity" name="min_severity">
+            <option value="warning">warning</option>
+            <option value="critical">critical</option>
+          </select>
+        </div>
+      </div>
+      <div class="row g-2 mt-1" id="email-fields">
+        <div class="col-12 col-md-5">
+          <label class="form-label" for="email-host">SMTP server</label>
+          <input class="form-control" id="email-host" maxlength="253" placeholder="smtp.example.org">
+        </div>
+        <div class="col-4 col-md-2">
+          <label class="form-label" for="email-port">Port</label>
+          <input class="form-control" id="email-port" type="number" min="1" max="65535" value="587">
+        </div>
+        <div class="col-8 col-md-5">
+          <label class="form-label" for="email-security">Encryption</label>
+          <select class="form-select" id="email-security">
+            <option value="starttls">STARTTLS (port 587)</option>
+            <option value="tls">TLS (port 465)</option>
+            <option value="none">None (insecure)</option>
+          </select>
+        </div>
+        <div class="col-12 col-md-6">
+          <label class="form-label" for="email-username">Username</label>
+          <input class="form-control" id="email-username" maxlength="255" autocomplete="off">
+        </div>
+        <div class="col-12 col-md-6">
+          <label class="form-label" for="email-password">Password <span class="text-body-secondary small" id="email-password-hint"></span></label>
+          <input class="form-control" id="email-password" type="password" autocomplete="new-password">
+        </div>
+        <div class="col-12 col-md-6">
+          <label class="form-label" for="email-from">From address</label>
+          <input class="form-control" id="email-from" type="email" maxlength="254">
+        </div>
+        <div class="col-12 col-md-6">
+          <label class="form-label" for="email-to">Recipients <span class="text-body-secondary small">(comma separated)</span></label>
+          <input class="form-control" id="email-to" maxlength="2000">
+        </div>
+      </div>
+      <div class="row g-2 mt-1 d-none" id="webhook-fields">
+        <div class="col-12">
+          <label class="form-label" for="webhook-url">URL</label>
+          <input class="form-control" id="webhook-url" type="url" maxlength="2048" placeholder="https://ntfy.example.org/nas">
+        </div>
+        <div class="col-12 col-md-6">
+          <label class="form-label" for="webhook-secret">Signing secret <span class="text-body-secondary small" id="webhook-secret-hint"></span></label>
+          <input class="form-control" id="webhook-secret" type="password" autocomplete="new-password">
+        </div>
+        <div class="col-12 col-md-6">
+          <label class="form-label" for="webhook-authorization">Authorization header <span class="text-body-secondary small" id="webhook-authorization-hint"></span></label>
+          <input class="form-control" id="webhook-authorization" type="password" autocomplete="new-password" placeholder="Bearer …">
+        </div>
+      </div>
+      <div class="d-flex flex-wrap gap-3 mt-3">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="channel-enabled" checked>
+          <label class="form-check-label" for="channel-enabled">Enabled</label>
+        </div>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="channel-resolved" checked>
+          <label class="form-check-label" for="channel-resolved">Also notify when resolved</label>
+        </div>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="channel-insecure">
+          <label class="form-check-label" for="channel-insecure">Allow unencrypted (plain SMTP / HTTP)</label>
+        </div>
+      </div>
+      <p class="text-body-secondary small mt-2 mb-0">
+        Leave a secret field empty to keep the stored value. Secrets are encrypted and never shown again.
+      </p>
+      <div class="mt-3 d-flex gap-2">
+        <button type="submit" class="btn btn-primary btn-sm">Save channel</button>
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="channel-cancel">Cancel</button>
+      </div>
+    </form>
+    {% endif %}
+    <div class="table-responsive">
+      <table class="table table-striped align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Destination</th>
+            <th>Severity</th>
+            <th>Last test</th>
+            {% if can('system:write') %}<th class="text-end">Actions</th>{% endif %}
+          </tr>
+        </thead>
+        <tbody id="channels-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script type="module" src="{{ url_for('static', path='js/alerts.js') }}"></script>
+{% endblock %}
