@@ -94,6 +94,27 @@ Then open **Disks** in the UI: physical disks, mounted volumes and RAID arrays r
 - With `NAS_HELPER_ENABLED=true`, **Samba Apply** now also writes `/etc/samba/smb.conf` (via the helper) and reloads `smbd`; the Samba page shows the helper state and `reload_required: false`.
 - **Test on a scratch disk only** (USB stick or a spare drive): format a test filesystem (`sudo mkfs.ext4 /dev/sdX`), then use the Disks page to mount it under `/mnt` and unmount it again. Never point the page at a disk holding data.
 
+### Remote and cloud sync (Phase 7, sync worker)
+
+Sync jobs run in a separate worker process under the same unprivileged account. Without it, runs stay `queued` and the Remote sync page shows "Worker offline".
+
+```bash
+sudo cp deploy/systemd/nas-manager-worker.service /etc/systemd/system/
+# Managed file roots outside /var/lib/nas-manager must also be writable by the
+# worker: add them with `sudo systemctl edit nas-manager-worker` →
+#   [Service]
+#   ReadWritePaths=/srv/nas
+sudo systemctl daemon-reload
+sudo systemctl enable --now nas-manager-worker
+journalctl -u nas-manager-worker -n 50 --no-pager
+```
+
+- The worker refuses to start until the schema is current (the web unit migrates in `ExecStartPre`, and the worker unit is ordered after it). It logs to `worker.log` in the log directory (`NAS_LOG_FILE_NAME`), separately from the web process.
+- Remote credentials are encrypted with the key file `/var/lib/nas-manager/secrets/credentials.key`, created on first use (0600). **Back it up with the database** (see `BACKUP_AND_RESTORE.md`).
+- **SFTP:** use **Fetch host key** in the connection form and compare the fingerprint with the server (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the server) before trusting it.
+- **Google Drive:** in Google Cloud Console create an OAuth client of type *Web application* with the redirect URI `https://<your NAS URL>/api/v1/remotes/oauth/callback` (enable the Google Drive API for the project). Set `NAS_PUBLIC_BASE_URL=https://<your NAS URL>` in `/etc/nas-manager/nas-manager.env`, restart `nas-manager`, create a Google Drive connection with the client id and secret, then click **Connect** and grant access. The scope is full Drive access (`https://www.googleapis.com/auth/drive`) so existing folders can be synced. The callback identifies you by your session cookie, which the browser only sends on Google's redirect with `NAS_SESSION_COOKIE_SAMESITE=lax` (the default); with `strict` the callback answers 401.
+- Create jobs disabled, run **Preview** (a dry run that lists every planned action), and only then **Run now** or enable a schedule.
+
 Verify:
 
 ```bash
@@ -111,7 +132,7 @@ The unit applies strict sandboxing (`SystemCallFilter`, `MemoryDenyWriteExecute`
 
 1. Back up `/var/lib/nas-manager` (see `BACKUP_AND_RESTORE.md`).
 2. Replace application files, reinstall `requirements.txt`.
-3. `sudo systemctl restart nas-manager` (migrations apply automatically).
+3. `sudo systemctl restart nas-manager` (migrations apply automatically), then `sudo systemctl restart nas-manager-worker` if the sync worker is installed.
 
 ## Dependency pinning
 

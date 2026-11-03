@@ -28,6 +28,7 @@ CATEGORY_DISK = "disk"
 CATEGORY_RAID = "raid"
 CATEGORY_API_TOKEN = "api_token"  # noqa: S105
 CATEGORY_UPLOAD = "upload"
+CATEGORY_REMOTE_SYNC = "remote_sync"
 
 OUTCOME_SUCCESS = "success"
 OUTCOME_FAILURE = "failure"
@@ -110,6 +111,25 @@ UPLOAD_SESSION_CREATED = "upload.session_created"
 UPLOAD_SESSION_COMPLETED = "upload.session_completed"
 UPLOAD_SESSION_ABORTED = "upload.session_aborted"
 UPLOAD_SESSION_EXPIRED = "upload.session_expired"
+
+# remote connection and sync events (Phase 7)
+REMOTE_CREATED = "remote.created"
+REMOTE_UPDATED = "remote.updated"
+REMOTE_DELETED = "remote.deleted"
+REMOTE_TESTED = "remote.tested"
+REMOTE_OAUTH_CONNECTED = "remote.oauth_connected"
+REMOTE_OAUTH_FAILED = "remote.oauth_failed"
+SYNC_JOB_CREATED = "sync_job.created"
+SYNC_JOB_UPDATED = "sync_job.updated"
+SYNC_JOB_DELETED = "sync_job.deleted"
+SYNC_RUN_QUEUED = "sync_run.queued"
+SYNC_RUN_CANCEL_REQUESTED = "sync_run.cancel_requested"
+SYNC_RUN_FINISHED = "sync_run.finished"
+SYNC_RUN_FAILED = "sync_run.failed"
+SYNC_CONFLICT = "sync.conflict"
+SYNC_CONFLICT_ACKNOWLEDGED = "sync.conflict_acknowledged"
+SYNC_ARCHIVED = "sync.archived"
+SYNC_DELETION_GUARD_TRIPPED = "sync.deletion_guard_tripped"
 
 
 class RequestContext(TypedDict):

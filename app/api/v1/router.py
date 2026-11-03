@@ -11,6 +11,8 @@ from app.api.v1 import (
     groups,
     health,
     public_uploads,
+    remote_sync,
+    remotes,
     roles,
     samba,
     settings,
@@ -40,3 +42,8 @@ api_router.include_router(api_tokens.admin_router)
 api_router.include_router(uploads.router)
 api_router.include_router(sync.router)
 api_router.include_router(sync.info_router)
+api_router.include_router(remotes.router)
+api_router.include_router(remote_sync.status_router)
+api_router.include_router(remote_sync.jobs_router)
+api_router.include_router(remote_sync.runs_router)
+api_router.include_router(remote_sync.conflicts_router)

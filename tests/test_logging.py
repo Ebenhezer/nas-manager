@@ -128,3 +128,21 @@ def test_explicit_request_id_extra_wins_over_context() -> None:
 def test_uvicorn_color_message_is_not_logged() -> None:
     payload = json.loads(JsonFormatter().format(_record(color_message="\x1b[36mhi\x1b[0m")))
     assert "color_message" not in payload
+
+
+def test_log_file_name_is_configurable(settings: Settings, tmp_path: Path) -> None:
+    """The sync worker (Phase 7) writes its own file so two processes never rotate one."""
+    cfg = settings.model_copy(
+        update={"log_to_file": True, "log_dir": tmp_path / "logs", "log_file_name": "worker.log"}
+    )
+    configure_logging(cfg)
+    logging.getLogger("t").info("from the worker")
+    for handler in logging.getLogger().handlers:
+        handler.flush()
+    assert "from the worker" in (tmp_path / "logs" / "worker.log").read_text()
+
+
+def test_remote_client_libraries_stay_quiet(settings: Settings) -> None:
+    configure_logging(settings.model_copy(update={"log_level": "DEBUG"}))
+    for name in ("paramiko", "botocore", "httpx2"):
+        assert logging.getLogger(name).level == logging.WARNING

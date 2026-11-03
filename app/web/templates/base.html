@@ -141,6 +141,15 @@
           <span>API tokens</span>
         </a>
         {% endif %}
+        {% if can('remotes:read') %}
+        <a class="app-nav-link{% if request.url.path == '/remote-sync' %} active{% endif %}" href="/remote-sync"{% if request.url.path == '/remote-sync' %} aria-current="page"{% endif %}>
+          <svg class="app-nav-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 8.5a4 4 0 0 1-.5 7.97"/>
+            <path d="M12 21v-8M9 16l3-3 3 3"/>
+          </svg>
+          <span>Remote sync</span>
+        </a>
+        {% endif %}
       </nav>
 
       <div class="app-sidebar-footer">

@@ -23,7 +23,7 @@ CSRFProtectMiddleware      double-submit + session-bound token check
                                      (Bootstrap vendored, modular ES JavaScript)
 ```
 
-Rules: routes validate and delegate; services hold logic and talk to the OS or database; schemas define the API contract; models define persistence. Background jobs will live in `app/jobs/` (not created yet).
+Rules: routes validate and delegate; services hold logic and talk to the OS or database; schemas define the API contract; models define persistence. Background work runs in a separate worker process (`app/worker/`, Phase 7) that claims jobs from the database; the web process only records intent.
 
 ## Module map
 
@@ -32,21 +32,24 @@ Rules: routes validate and delegate; services hold logic and talk to the OS or d
 | `app/main.py` | Application factory: logging, directories, database, middleware, routers, startup checks |
 | `app/__main__.py` | `python -m app` entry point (uvicorn, application-controlled logging) |
 | `app/cli.py` | `python -m app.cli bootstrap-admin` (first-run administrator) |
+| `app/worker/` | `python -m app.worker`: the sync worker loop (`runner.py`: heartbeat, lease renewal/reclaim, scheduling, atomic claiming, thread pool, run-history pruning) |
 | `app/core/config.py` | `Settings` from `NAS_*` variables (incl. sessions, throttling, Argon2id costs) |
 | `app/core/logging.py` | JSON/text formatters, redaction, rotating file handler |
 | `app/core/middleware.py` | Request id, access log (path only, never query string), security headers |
 | `app/core/csrf.py` | CSRF protection middleware (double-submit + session-bound) |
 | `app/core/errors.py` | `AppError` hierarchy and the JSON error envelope |
 | `app/core/permissions.py` | Permission-token registry and default role grants |
+| `app/core/secrets.py` | Fernet key file (`NAS_CREDENTIALS_KEY_FILE`, created 0600) and `CredentialCipher` for remote credentials at rest |
 | `app/db/` | Naming conventions, engine/session factory, migration helpers, `get_db` |
 | `app/api/v1/deps.py` | `CurrentUser` (session or API token), `get_current_user`, `require_permission(...)`, `require_session_auth` |
-| `app/api/v1/` | `auth`, `users`, `groups`, `roles`, `audit`, `health`, `system`, `files`, `samba`, `settings`, `public_uploads`, `disks`, `api_tokens`, `uploads` (resumable), `sync` (+ `/info`) |
-| `app/services/` | `passwords`, `auth_service`, `users_service`, `groups_service`, `roles_service`, `security`, `audit`, `throttle`, `bootstrap_service`, `health`, `monitoring`, `settings_service`, `files`, `samba`, `public_uploads`, `api_tokens`, `resumable_uploads`, `sync` |
+| `app/api/v1/` | `auth`, `users`, `groups`, `roles`, `audit`, `health`, `system`, `files`, `samba`, `settings`, `public_uploads`, `disks`, `api_tokens`, `uploads` (resumable), `sync` (+ `/info`), `remotes`, `remote_sync` (jobs, runs, conflicts, status) |
+| `app/services/` | `passwords`, `auth_service`, `users_service`, `groups_service`, `roles_service`, `security`, `audit`, `throttle`, `bootstrap_service`, `health`, `monitoring`, `settings_service`, `files`, `samba`, `public_uploads`, `api_tokens`, `resumable_uploads`, `sync`, `remotes`, `remote_sync`, `sync_engine` |
+| `app/services/remote/` | Remote store providers behind one interface (`base.py`): `sftp` (paramiko, pinned host key), `ftp` (FTP/FTPS, `ftplib`), `webdav` and `gdrive` (httpx2), `s3` (boto3); `registry.py` holds the field specs, validation and factory |
 | `app/services/helper_client.py` | Thin `AF_UNIX` client for the privileged helper; maps helper errors to typed `AppError`s (503 unavailable, 400 validation/intent/operation) |
 | `app/services/disks.py` | Disk/volume/RAID discovery parsing (`lsblk`, `findmnt`, `/proc/mdstat`, `smartctl`), preview + confirmed actions, audit |
 | `app/helper/` | Privileged helper (root process): `operations.py` fixed allowlist, `server.py` Unix socket + `SO_PEERCRED`, `protocol.py` framing/intent digest, `__main__.py` entry |
-| `app/models/` | `user`, `group`, `role`, `session`, `audit_event`, `app_setting`, `samba_share`, `public_upload`, `api_token`, `upload_session`, `file_change` |
-| `app/web/` | Jinja2 templates + modular JS (login, dashboard, users, groups, audit, profile + API tokens, files, samba, settings, uploads, public_upload, disks, api_tokens admin) |
+| `app/models/` | `user`, `group`, `role`, `session`, `audit_event`, `app_setting`, `samba_share`, `public_upload`, `api_token`, `upload_session`, `file_change`, `remote` (connections, sync jobs, baselines, runs, conflicts) |
+| `app/web/` | Jinja2 templates + modular JS (login, dashboard, users, groups, audit, profile + API tokens, files, samba, settings, uploads, public_upload, disks, api_tokens admin, remote_sync) |
 
 ## Authentication and authorization
 
@@ -69,6 +72,9 @@ Every response carries `X-Request-ID`. A client-supplied id is honoured only if 
 ```
 systemd: nas-manager.service        (user nas-manager, no capabilities, sandboxed)
    └── uvicorn → FastAPI app → SQLite in /var/lib/nas-manager
+systemd: nas-manager-worker.service (user nas-manager, same sandbox)
+   └── python -m app.worker → claims sync runs from the same database,
+       talks to remote stores, writes inside the managed file roots
 systemd: nas-manager-helper.service (root, allowlisted operations only)
    └── Unix socket at /run/nas-manager/helper.sock (0660 root:<group>,
        SO_PEERCRED uid allowlist) ← the helper_client talks to this
@@ -91,6 +97,15 @@ The web process never executes arbitrary commands and never runs as root. The he
 - **Sync cursors.** `app/services/sync.py` appends a `file_changes` row for every file-manager mutation inside the mutation's own transaction; the row id is the cursor. `changes_since` pages forward per root and answers `reset` when the cursor predates the retained journal; `prune` drops rows past `NAS_SYNC_CHANGE_RETENTION_DAYS` (keeping the newest).
 - Migration `0006` adds the three tables and the `api_tokens:read`/`api_tokens:write` permissions (admin both, operator read).
 
+## Remote and cloud sync (Phase 7)
+
+- **Two processes, one database.** The web process manages connections and jobs and *queues* runs (`sync_runs` rows). The worker (`python -m app.worker`, its own systemd unit, same unprivileged user) does every transfer. Each tick it writes a heartbeat (`app_settings.worker.heartbeat`, shown in the UI), renews the leases of the runs it executes, fails runs whose lease expired (a dead worker), queues scheduled runs for enabled jobs, and claims queued runs with a conditional `UPDATE … WHERE status='queued'` (at most one run per job, up to `NAS_WORKER_CONCURRENCY` in parallel). SIGTERM stops claiming and asks running jobs to stop after their current file.
+- **Providers.** `RemoteProvider` (`app/services/remote/base.py`) exposes `list/walk`, `stat`, `download`, `upload` (temp name + rename where the protocol allows), `makedirs` and `move` (only used to archive), over POSIX paths relative to the connection's base. Every name a server returns is validated (no separators, `..`, control characters, over-long names) before it can become a local path; rejected entries are reported, never synced.
+- **Engine.** `app/services/sync_engine.py` is a three-way sync: local scan (regular files, no symlinks, temp files and `.nas-sync-archive/` skipped) × remote walk × per-file baseline (`sync_job_entries`, the state after the last successful sync of that file). `plan()` is pure; `SyncExecutor` applies actions and commits the baseline and run counters after each one, so a crash or cancel leaves a consistent, resumable state. Downloads stage as `.nas-remote-*.part` next to the target, are re-checked against the jail and moved into place atomically, and are journaled in `file_changes`, so Phase 6 sync clients see them.
+- **Data-safety rules.** Nothing is ever hard-deleted. One-way jobs never overwrite a changed destination (skipped and reported). Conflicts (both sides changed, or first sync with different content after an MD5/byte comparison) follow the job policy: `keep_both` (default; the other version is kept under `name (conflict <side> <timestamp>).ext`), `prefer_local` / `prefer_remote` (the losing version is moved to `.nas-sync-archive/` first). Deletions are reported (`ignore`, default) or archived on the other side (`archive`); a deletion against a modification restores the modified file. A deletion guard fails a run before any action when it would archive too much (`NAS_REMOTE_SYNC_MAX_DELETE_COUNT` / `_PERCENT`). Risky job settings need `confirm: true`; dry runs show the plan.
+- **Credentials.** Non-secret settings live in `remote_connections.config`; secrets are one Fernet token per connection (`app/core/secrets.py`). Google Drive uses OAuth 2.0 authorization code + PKCE; the state is single-use, bound to the user who started it and expires after 10 minutes.
+- Migration `0007` adds `remote_connections`, `sync_jobs`, `sync_job_entries`, `sync_runs`, `sync_conflicts` and the `remotes:read`/`remotes:write` permissions (admin both, operator read).
+
 ## Planned additions
 
-Sync engine and persistent job queue (7), gallery (8), streaming (9), alerting (10), backups (11), config export/import (12), audit/syslog (13).
+Gallery (8), streaming (9), alerting (10), backups (11), config export/import (12), audit/syslog (13).

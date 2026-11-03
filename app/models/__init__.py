@@ -7,6 +7,13 @@ from app.models.audit_event import AuditEvent
 from app.models.file_change import FileChange
 from app.models.group import Group
 from app.models.public_upload import PublicUploadFile, PublicUploadQuota
+from app.models.remote import (
+    RemoteConnection,
+    SyncConflict,
+    SyncJob,
+    SyncJobEntry,
+    SyncRun,
+)
 from app.models.role import Role, RolePermission
 from app.models.samba_share import SambaShare
 from app.models.session import AuthSession
@@ -22,9 +29,14 @@ __all__ = [
     "Group",
     "PublicUploadFile",
     "PublicUploadQuota",
+    "RemoteConnection",
     "Role",
     "RolePermission",
     "SambaShare",
+    "SyncConflict",
+    "SyncJob",
+    "SyncJobEntry",
+    "SyncRun",
     "UploadSession",
     "User",
     "group_roles",

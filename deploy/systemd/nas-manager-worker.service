@@ -1,0 +1,64 @@
+[Unit]
+Description=NAS Manager sync worker (remote and cloud synchronization)
+Documentation=file:///opt/nas-manager/docs/INSTALLATION.md
+# The web unit applies schema migrations in its ExecStartPre; the worker
+# refuses to start while the schema is behind, so order it after the web unit.
+After=network-online.target nas-manager.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nas-manager
+Group=nas-manager
+WorkingDirectory=/opt/nas-manager
+EnvironmentFile=/etc/nas-manager/nas-manager.env
+Environment=NAS_DATA_DIR=/var/lib/nas-manager
+Environment=NAS_LOG_DIR=/var/log/nas-manager
+Environment=NAS_ENVIRONMENT=production
+# The worker writes its own log file next to the web application's.
+Environment=NAS_LOG_FILE_NAME=worker.log
+
+ExecStart=/opt/nas-manager/.venv/bin/python -m app.worker
+
+Restart=on-failure
+RestartSec=10
+# SIGTERM asks running jobs to stop after their current file; give a large
+# transfer time to finish before systemd kills the process. An interrupted
+# run is reclaimed (marked failed) and the next run resumes from the
+# per-file sync records.
+TimeoutStopSec=300
+
+StateDirectory=nas-manager
+StateDirectoryMode=0750
+LogsDirectory=nas-manager
+LogsDirectoryMode=0750
+UMask=0027
+
+# Same sandbox as the web unit. Managed file roots outside /var/lib/nas-manager
+# must be listed here too, e.g.:
+# ReadWritePaths=/srv/nas
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+[Install]
+WantedBy=multi-user.target

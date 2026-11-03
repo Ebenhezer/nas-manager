@@ -145,3 +145,17 @@ def require_permission(permission: str) -> Callable[[CurrentUser], CurrentUser]:
         return current
 
     return guard
+
+
+def require_session_permission(permission: str) -> Callable[[CurrentUser], CurrentUser]:
+    """``require_permission`` that additionally refuses API tokens.
+
+    Used where a request handles credentials (Phase 7 remote connections),
+    so a leaked token can neither plant nor redirect stored secrets.
+    """
+    permission_guard = require_permission(permission)
+
+    def guard(current: CurrentUser = Depends(permission_guard)) -> CurrentUser:
+        return require_session_auth(current)
+
+    return guard

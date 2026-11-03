@@ -12,8 +12,8 @@ Status legend: **Done** (implemented and verified), **Next**, **Planned**.
 | 4 | Public upload folder and quotas | **Done** |
 | 5 | Disk discovery, storage and RAID management (+ privileged helper) | **Done** |
 | 6 | REST API, API tokens, mobile-client support | **Done** |
-| 7 | Cloud and remote synchronization | Planned |
-| 8 | Photo gallery and personal media libraries | Planned |
+| 7 | Cloud and remote synchronization (+ sync worker) | **Done** |
+| 8 | Photo gallery and personal media libraries | **Next** |
 | 9 | Video playback and streaming | Planned |
 | 10 | System monitoring and alerting | Planned |
 | 11 | Backup and restore | Planned |
@@ -176,6 +176,14 @@ Delivered:
 21. **Resumable uploads reuse the single-shot commit path.** Bytes accumulate next to the destination (`.nas-resumable-<id>.part`, hidden from listings and spared by the drop-folder cleanup), every chunk is offset-checked and fsync'ed before the offset advances, and completion calls the same `commit_staged` helpers as multipart uploads, so the jail, overwrite and quota-lock guarantees are identical. The quota check at creation is advisory; the authoritative one runs at completion.
 22. **Sync is a journal, not a scanner.** Every file-manager mutation appends a `file_changes` row inside its own transaction; the id is the cursor. A cursor older than the retained journal (or from another database) gets `reset: true` and the client re-lists. Out-of-band changes (Samba, the shell) are deliberately out of scope for this phase.
 
+23. **Transfers run in a separate worker, not in the web process.** `python -m app.worker` (own systemd unit, same unprivileged user) claims queued runs with a conditional `UPDATE`, holds a lease that its main loop renews every tick, and reclaims runs whose worker died. The web process only records jobs, queued runs and cancel flags, so uvicorn workers never execute a sync and a long transfer never ties up a request.
+24. **Three-way sync with a per-file baseline; nothing is hard-deleted.** Each file's state after its last successful sync (`sync_job_entries`) decides who changed. One-way jobs never overwrite a changed destination; conflicts keep both versions by default (`prefer_*` archive the loser first); deletions are reported or archived into `.nas-sync-archive/`, never propagated as deletes; a deletion against a modification restores the file. The baseline is committed after every action, so crashes and cancellations resume cleanly.
+25. **Identical files are adopted, not duplicated.** When both sides have a file without a baseline (or both changed), content is compared first: MD5 when the provider reports one (S3 single-part ETag, Drive `md5Checksum`), otherwise by downloading to a temp file and comparing bytes. Only real differences become conflicts.
+26. **A missing remote folder is an error once synced.** A first sync into a folder that does not exist yet creates it; a folder that disappears after files were synced fails the run instead of looking like a mass deletion (an unmounted or renamed remote is the likely cause). The deletion guard (`NAS_REMOTE_SYNC_MAX_DELETE_COUNT` / `_PERCENT`, percentage only above 5 archives) covers the remaining "everything vanished" cases.
+27. **Credentials: Fernet with a key file; secrets never leave the service layer.** One encrypted blob per connection, a 0600 key file outside the database, API responses that only name the set fields, PATCH that keeps omitted secrets, and session-only credential endpoints. Key rotation is deferred.
+28. **Trust is explicit.** SFTP host keys are pinned (probe → administrator confirms the fingerprint → `RejectPolicy`); plain FTP and plain HTTP need `allow_insecure`; Google Drive uses authorization code + PKCE with a single-use, user-bound, 10-minute state. Risky job settings (enabling, two-way, archive, `prefer_*`, overriding the deletion guard) need `confirm: true`, and the 400 response lists the risks so the UI can show them.
+29. **Providers are thin and testable.** One `RemoteProvider` interface; WebDAV and Drive use `httpx2` directly (no Google client libraries) so tests can drive them with `MockTransport`; S3 uses boto3 (tested with botocore's `Stubber`); SFTP is tested against a real paramiko SFTP server over loopback.
+
 ## Known limitations
 
 - The management UI was exercised via TestClient and curl, not a real browser.
@@ -185,7 +193,8 @@ Delivered:
 - The bearer-failure throttle and the per-upload resumable lock are in-process; a multi-process deployment needs shared state for both.
 - The sync journal records only changes made through the application; edits over Samba or directly on disk are not journaled (clients should re-list periodically).
 - Monitoring is limited to CPU, memory, swap, disk-usage entries and network byte counters; per-disk and RAID *discovery* exists (Phase 5) but there are no processes, services, RAID health curation or alerting yet (Phase 10).
-- No background job framework yet (needed from Phase 7 onward).
+- The sync worker is a single process (`NAS_WORKER_CONCURRENCY` threads); several workers on one database are safe (atomic claims, leases) but were only exercised as one process. Other housekeeping (resumable-upload expiry, journal pruning) still runs on request, not in the worker.
+- Remote sync limitations (Phase 7): empty directories are not synced; renames are seen as a new file plus a deletion (so with `delete_policy=ignore` the old name stays on the other side); files changed outside the sync between scan and transfer are skipped until the next run; FTP needs `MLSD`; Google Drive skips Google-native documents and duplicate names; there is no bandwidth limit, no per-file size cap and no partial-file resume for remote transfers (an interrupted file restarts); the credentials key cannot be rotated yet.
 - `smbd` reload is performed by the Phase 5 helper when `NAS_HELPER_ENABLED=true`; without the helper the web process still writes where it can and reports `reload_required`.
 - The file manager has no per-share or per-user folder permissions yet; access is governed by the `files:*`/`samba:*` permissions and the operator toggle. Only the helper can mount/umount disks; there is no fstab persistence or auto-mount yet.
 - Anonymous public-upload quotas are keyed by client IP (`ip:`) — NAT/proxies coalesce addresses and botnets can fragment them; API-token clients get their own `token:<id>` quota (Phase 6). The anonymous drop endpoint is not rate limited yet. Uploads are also served on whatever interface the app binds; a public deployment must put the drop page behind TLS and (optionally) a rate limit.
@@ -265,3 +274,41 @@ Delivered:
 - The resumable-upload lock and the bearer-failure throttle were exercised in a single process only.
 - PostgreSQL still not exercised.
 
+## Phase 7: completed
+
+Delivered:
+
+- **Providers** (`app/services/remote/`): SFTP (paramiko, pinned host key + `RejectPolicy`, password or OpenSSH/PEM key), FTPS (`AUTH TLS` + `PROT P`, verified certificates) and plain FTP (only with `allow_insecure`), WebDAV (httpx2; HTTPS unless `allow_insecure`; `PUT` to a temp name then `MOVE`), S3-compatible storage (boto3: AWS or any `endpoint_url`; flat prefix listing; archive = copy + delete), and Google Drive (Drive v3 over httpx2; OAuth authorization code + PKCE; resumable uploads; duplicate names and Google-native documents reported and skipped). One `RemoteProvider` interface; every remote name is validated before it can become a local path.
+- **Credentials at rest** (`app/core/secrets.py`): Fernet, key file `NAS_CREDENTIALS_KEY_FILE` (default `<data_dir>/secrets/credentials.key`, created 0600 in a 0700 directory, loose permissions refused). Responses only list which secret fields are set; PATCH keeps omitted secrets; audit details never contain values.
+- **Sync engine** (`app/services/sync_engine.py`): three-way plan (local scan × remote walk × per-file baseline), one-way (push/pull) and two-way jobs, conflict policies `keep_both` / `prefer_local` / `prefer_remote`, delete policies `ignore` / `archive` (`.nas-sync-archive/job-<id>/<timestamp>/`), content comparison before declaring conflicts, deletion guard, exclude patterns, dry runs, atomic staged downloads journaled into `file_changes`, per-action baseline commits (resumable), cancellation between files, and a stop after 10 consecutive errors.
+- **Worker** (`app/worker/`, `deploy/systemd/nas-manager-worker.service`): heartbeat, lease renewal and reclaim, schedule-driven queueing, atomic claims (one run per job, `NAS_WORKER_CONCURRENCY` threads), run-history pruning, graceful SIGTERM, refuses an outdated schema. Logs to its own file (`NAS_LOG_FILE_NAME=worker.log`).
+- **Migration `0007`**: `remote_connections`, `sync_jobs`, `sync_job_entries`, `sync_runs`, `sync_conflicts`; permissions `remotes:read` (admin, operator) and `remotes:write` (admin).
+- **API**: `/remotes` (catalogue, CRUD, test, browse, SFTP host-key probe, Drive OAuth start/callback), `/sync-jobs` (CRUD, run/dry-run, runs, conflicts), `/sync-runs/{id}` (+ cancel), `/sync-conflicts/{id}/acknowledge`, `/remote-sync/status`; `/info` advertises `remote_sync`. Risky settings return `400 confirmation_required` with the list of risks unless `confirm: true`. Remote failures are `502 remote_error`.
+- **Web UI**: a **Remote sync** page (worker status, connections with a provider-driven form, host-key fetch + fingerprint confirmation, Drive Connect, jobs, Preview with the planned actions, Run now, run history, conflicts with acknowledge). CSP-compatible; `apiFetch` errors now carry `status`/`code`/`details`.
+- **Also**: `NAS_LOG_FILE_NAME` (one log file per process), remote client libraries' loggers held at WARNING, `.nas-remote-*` staging files hidden from file listings, Postman collection `docs/postman/nas-manager-phase7.postman_collection.json`.
+
+### Verification (executed in this workspace, Python 3.12.3, Ubuntu 24.04)
+
+| Check | Result |
+|-------|--------|
+| `pytest` | __TOTAL__ passed (343 before Phase 7; +__NEW__ in `test_remote_sync_engine.py`, `test_remote_providers.py`, `test_remote_sync_api.py`, `test_worker.py`, `test_secrets.py`, plus additions to `test_migrations.py`, `test_dashboard.py`, `test_logging.py`) |
+| Coverage (`app/`) | __COV__ overall; __COVDETAIL__ |
+| `ruff check` / `ruff format --check` | clean |
+| `mypy` (strict, `app` + `tests`) | no issues in __MYPY__ source files |
+| `alembic upgrade head` on a fresh directory | applies `0001`–`0007`; drift test clean; `downgrade 0006` drops the five tables and the `remotes:*` grants; re-upgrade works |
+| Dependency pins | `pip install --dry-run --ignore-installed --no-deps -r requirements-dev.txt` resolves; `pip check` reports no broken requirements; all new modules import with warnings as errors |
+| Engine | every planner rule (direction × change × conflict × deletion), deletion guard, conflict names, exclude matching, scan skipping symlinks/temp/archive; full runs against a local-directory provider: push/pull/two-way, one-way never overwrites a changed destination, all three conflict policies in every direction, identical-file adoption (byte compare and MD5), ignore vs archive deletions (journaled), modified-vs-deleted restore, guard trip + override, dry run, excludes, hostile remote names, cancel, per-file failure retried next run, dead connection, missing local folder, new remote folder created / vanished remote folder refused |
+| Providers | SFTP against a real paramiko SFTP server over loopback (round trip, makedirs, move, `dir_exists`, host-key mismatch refused, bad password, host-key probe, unreachable host); WebDAV with `MockTransport` (walk, `..` href rejected, temp `PUT` + `MOVE`, `MKCOL`, 401, malformed XML); S3 with botocore `Stubber` (flat walk, multipart ETag not taken as MD5, folder markers and archive skipped, traversal key rejected, 404 stat, `dir_exists`, error mapping); FTP/FTPS with a fake `ftplib` (MLSD parsing, `PROT P`, rename-over fallback, login refused, no MLSD); Drive with `MockTransport` (token caching and refresh on 401, duplicates and native docs rejected, resumable upload, download, OAuth URL and code exchange) |
+| API | CRUD with secrets never returned or audited; PATCH keeps/clears secrets; validation (unknown provider, secrets in config, plain HTTP/FTP, duplicates); connection test recorded and audited; browse + traversal rejected; API tokens refused on credential endpoints; anon 401 / viewer 403 / operator read-only; job lifecycle (dry-run queue, 409 on second run and on delete while active, cancel, delete keeps files); job validation (traversal, unknown root, missing directory, bad enums/patterns); confirmation gating; baseline reset on path change; worker status; conflicts acknowledge; OAuth start → callback stores an encrypted refresh token, single-use state, forged/expired state rejected, missing `NAS_PUBLIC_BASE_URL` explained |
+| Worker | heartbeat; scheduled job queued, run and rescheduled; manual/disabled jobs not scheduled; one run per job; expired lease reclaimed and audited; own leases renewed; pruning keeps active runs; stop event cancels a run; `run_forever` exits on stop; `python -m app.worker` exits 1 on an unmigrated database |
+| Live run (`python -m app` + `python -m app.worker` + a loopback paramiko SFTP server, scratch data dir) | host-key probe → SFTP connection (secret not echoed) → test ok → two-way job refused without confirm, accepted with it → dry run planned 2 uploads + 1 download and touched nothing → live run uploaded 2 / downloaded 1 (1016 bytes) → both sides edited the same file → conflict kept both versions (remote edit saved locally as `notes (conflict remote …).txt`, local edit on the remote) → pulled and conflict files appear in `/sync/changes` → worker heartbeat online → audit trail complete → `/remote-sync` page 200. Worker stopped cleanly on SIGTERM. Key file 0600 in a 0700 directory; the SFTP password is absent from the database, WAL, logs and audit log; no ERROR entries or tracebacks |
+| Postman collection | all 23 requests replayed against the live stack with a Python runner generated from the same definition as the collection: all checks passed, twice in a row (the second pass also showed identical-file adoption: a new job over already-synced files transferred nothing) |
+| systemd | `systemd-analyze verify` on the worker unit: only reports `/opt/nas-manager/.venv/bin/python` missing, which is expected in this workspace |
+
+### Not verified
+
+- **No real cloud or remote service was used.** Google Drive (consent screen, real API responses), AWS S3 or another S3-compatible service, real WebDAV servers (Nextcloud, ownCloud, Apache `mod_dav`) and real FTP/FTPS servers were not reachable here; those providers are tested against mocks only. SFTP was exercised against a paramiko test server, not OpenSSH. Test each provider against your real endpoint with a small job and a dry run first.
+- The **Remote sync page was not used in a real browser**, and its JavaScript was not syntax-checked (no Node runtime here). A test checks that every element the script looks up exists in the rendered page.
+- The **worker unit was not run under real systemd**; in particular `MemoryDenyWriteExecute` with `cryptography`/`paramiko` and outbound network access from the sandbox are unverified.
+- Large trees and large files (performance, memory use of a full remote listing, multi-gigabyte transfers, S3 multipart uploads) were not tested.
+- Only one worker process was run; PostgreSQL is still unexercised.

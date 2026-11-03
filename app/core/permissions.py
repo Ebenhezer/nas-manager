@@ -30,6 +30,8 @@ PERMISSIONS: list[str] = [
     "disks:write",
     "api_tokens:read",
     "api_tokens:write",
+    "remotes:read",
+    "remotes:write",
 ]
 
 ALL_PERMISSIONS: frozenset[str] = frozenset(PERMISSIONS)
@@ -38,7 +40,7 @@ ROLE_DESCRIPTIONS: dict[str, str] = {
     "admin": "Full access to every managed resource, including user and group management.",
     "operator": (
         "Read access to users, groups, roles, audit log, system, settings, public upload usage"
-        " and API token metadata."
+        ", API token metadata and remote sync status (never remote credentials)."
     ),
     "viewer": "Read-only access to the dashboard.",
 }
@@ -56,6 +58,7 @@ ROLE_DEFAULT_PERMISSIONS: dict[str, list[str]] = {
         "uploads:read",
         "disks:read",
         "api_tokens:read",
+        "remotes:read",
     ],
     "viewer": ["dashboard:read"],
 }

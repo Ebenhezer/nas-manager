@@ -38,7 +38,9 @@ from app.services import audit, sync
 _CHUNK_SIZE = 1024 * 1024
 _UPLOAD_TMP_PREFIX = ".nas-upload-"
 RESUMABLE_TMP_PREFIX = ".nas-resumable-"
-_TMP_PREFIXES = (_UPLOAD_TMP_PREFIX, RESUMABLE_TMP_PREFIX)
+# Remote sync downloads (Phase 7) stage here before an atomic move into place.
+REMOTE_TMP_PREFIX = ".nas-remote-"
+TMP_PREFIXES = (_UPLOAD_TMP_PREFIX, RESUMABLE_TMP_PREFIX, REMOTE_TMP_PREFIX)
 
 
 class _RequestContext(TypedDict, total=False):
@@ -121,7 +123,7 @@ def list_dir(
     entries = [
         _entry_for(child, root)
         for child in target.iterdir()
-        if not child.name.startswith(_TMP_PREFIXES)
+        if not child.name.startswith(TMP_PREFIXES)
     ]
     entries.sort(key=lambda entry: (not entry.is_dir, entry.name.lower()))
     return str(root), rel_path, entries
@@ -434,7 +436,7 @@ def search(
     matches: list[FileEntry] = []
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         for name in dirnames + filenames:
-            if name.startswith(_TMP_PREFIXES):
+            if name.startswith(TMP_PREFIXES):
                 continue
             if needle in name.lower():
                 matches.append(_entry_for(Path(dirpath) / name, root))

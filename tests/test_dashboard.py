@@ -68,6 +68,7 @@ def test_management_pages_require_authentication(client: TestClient) -> None:
         "/settings",
         "/uploads",
         "/tokens",
+        "/remote-sync",
     ]:
         response = client.get(path, follow_redirects=False)
         assert response.status_code == 302, path
@@ -85,7 +86,17 @@ def test_dashboard_has_no_inline_script_or_style(page: TestClient) -> None:
 
 
 @pytest.mark.parametrize(
-    "path", ["/files", "/samba", "/settings", "/uploads", "/public/upload", "/tokens", "/profile"]
+    "path",
+    [
+        "/files",
+        "/samba",
+        "/settings",
+        "/uploads",
+        "/public/upload",
+        "/tokens",
+        "/profile",
+        "/remote-sync",
+    ],
 )
 def test_phase3_pages_have_no_inline_script_or_style(page: TestClient, path: str) -> None:
     """Phase 3/4 pages must stay within the same CSP (no inline code)."""
@@ -104,6 +115,19 @@ def test_change_password_fields_match_profile_js(page: TestClient) -> None:
     for name in ("current", "new"):
         assert f'name="{name}"' in html
         assert f'data.get("{name}")' in script
+
+
+def test_remote_sync_page_has_every_element_its_script_uses(page: TestClient) -> None:
+    """remote_sync.js looks elements up by id; an admin page must render all of them."""
+    import re
+
+    html = page.get("/remote-sync").text
+    script = (STATIC_DIR / "js" / "remote_sync.js").read_text()
+    ids = set(re.findall(r'getElementById\("([a-z0-9-]+)"\)', script))
+    assert ids, "expected getElementById lookups"
+    # cf-* are the connection form fields the script generates itself.
+    missing = sorted(i for i in ids if f'id="{i}"' not in html and not i.startswith("cf-"))
+    assert missing == []
 
 
 @pytest.mark.parametrize(
@@ -125,6 +149,7 @@ def test_change_password_fields_match_profile_js(page: TestClient) -> None:
         "/static/js/settings.js",
         "/static/js/uploads.js",
         "/static/js/public_upload.js",
+        "/static/js/remote_sync.js",
         "/static/vendor/bootstrap/bootstrap.min.css",
         "/static/vendor/bootstrap/bootstrap.bundle.min.js",
     ],

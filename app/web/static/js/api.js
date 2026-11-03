@@ -45,7 +45,11 @@ export function apiFetch(path, { method = "GET", body, allowStatuses = [] } = {}
       parsed = null;
     }
     if (!response.ok && !allowStatuses.includes(response.status)) {
-      throw new Error(await parseError(response.status, parsed));
+      const error = new Error(await parseError(response.status, parsed));
+      error.status = response.status;
+      error.code = parsed && parsed.error ? parsed.error.code : null;
+      error.details = parsed && parsed.error ? parsed.error.details : null;
+      throw error;
     }
     return parsed;
   });

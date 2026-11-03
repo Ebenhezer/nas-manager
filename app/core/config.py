@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     log_format: Literal["json", "text"] = "json"
     log_to_console: bool = True
     log_to_file: bool = True
+    # Each process needs its own file: the sync worker (Phase 7) sets
+    # NAS_LOG_FILE_NAME=worker.log so two processes never rotate one file.
+    log_file_name: str = Field(
+        default="nas-manager.log", pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    )
     log_max_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
     log_backup_count: int = Field(default=5, ge=0, le=100)
 
@@ -147,6 +152,33 @@ class Settings(BaseSettings):
     resumable_max_open_per_user: int = Field(default=10, ge=1, le=1000)
     sync_change_retention_days: int = Field(default=30, ge=1, le=3650)
 
+    # ------------------------------------------------------------------
+    # Remote and cloud synchronization (Phase 7). Remote credentials are
+    # encrypted at rest with a Fernet key kept in NAS_CREDENTIALS_KEY_FILE
+    # (default <data_dir>/secrets/credentials.key, created 0600 on first
+    # use). Back it up together with the database: without it the stored
+    # credentials cannot be decrypted. Sync jobs run in the separate worker
+    # process (python -m app.worker), never inside the web process.
+    # NAS_PUBLIC_BASE_URL is the externally reachable URL of this
+    # application (e.g. https://nas.example.org); it is only needed to
+    # build the Google Drive OAuth redirect URI.
+    # ------------------------------------------------------------------
+    credentials_key_file: Path | None = None
+    public_base_url: str | None = None
+    remote_connect_timeout_seconds: int = Field(default=20, ge=1, le=300)
+    remote_browse_limit: int = Field(default=500, ge=1, le=10000)
+    remote_sync_poll_seconds: int = Field(default=15, ge=1, le=3600)
+    worker_concurrency: int = Field(default=1, ge=1, le=8)
+    remote_sync_lease_seconds: int = Field(default=300, ge=30, le=86400)
+    # Deletion guard: a run that would archive more than this many files,
+    # or more than this percentage of the files it last synced, fails
+    # before touching anything.
+    remote_sync_max_delete_count: int = Field(default=500, ge=0, le=1_000_000)
+    remote_sync_max_delete_percent: int = Field(default=10, ge=0, le=100)
+    remote_sync_run_retention_days: int = Field(default=90, ge=1, le=3650)
+    # Maximum number of planned actions stored with a run (dry-run preview).
+    remote_sync_preview_limit: int = Field(default=1000, ge=10, le=100_000)
+
     @field_validator(
         "data_dir",
         "log_dir",
@@ -154,6 +186,7 @@ class Settings(BaseSettings):
         "samba_backup_dir",
         "public_upload_dir",
         "helper_socket",
+        "credentials_key_file",
     )
     @classmethod
     def _absolute(cls, value: Path | None) -> Path | None:
@@ -176,6 +209,16 @@ class Settings(BaseSettings):
         value = value.strip()
         if not value or not all(c.isalnum() or c in "._- " for c in value):
             raise ValueError("cookie name must be a simple ASCII token")
+        return value
+
+    @field_validator("public_base_url")
+    @classmethod
+    def _base_url(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        value = value.strip().rstrip("/")
+        if not value.startswith(("https://", "http://")) or any(c in value for c in "?#"):
+            raise ValueError("NAS_PUBLIC_BASE_URL must be an http(s) URL without query/fragment")
         return value
 
     @model_validator(mode="after")
@@ -224,6 +267,13 @@ class Settings(BaseSettings):
         )
 
     @property
+    def resolved_credentials_key_file(self) -> Path:
+        """Fernet key protecting remote credentials at rest."""
+        if self.credentials_key_file is not None:
+            return self.credentials_key_file
+        return self.data_dir / "secrets" / "credentials.key"
+
+    @property
     def resolved_helper_socket(self) -> Path:
         """Unix socket the privileged helper listens on."""
         if self.helper_socket is not None:
@@ -255,6 +305,7 @@ class Settings(BaseSettings):
             # the operator's responsibility and are never auto-created.
             (self.data_dir / "files").mkdir(parents=True, exist_ok=True, mode=0o750)
         self.resolved_public_upload_dir.mkdir(parents=True, exist_ok=True, mode=0o750)
+        self.resolved_credentials_key_file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
 
 
 @lru_cache

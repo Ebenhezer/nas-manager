@@ -293,9 +293,86 @@ Every change the file manager makes (upload, overwrite, mkdir, rename, delete �
 
 ## Client discovery and downloads
 
-- `GET /info` (public) → `{"name", "version", "api_version": "1", "features": ["api_tokens", "resumable_uploads", "sync_cursors", "range_downloads"], "auth_schemes": ["session", "bearer"], "limits": {"max_upload_bytes", "resumable_chunk_max_bytes", "resumable_upload_ttl_hours", "sync_change_retention_days"}}`. Nothing sensitive (no paths, no counts).
+- `GET /info` (public) → `{"name", "version", "api_version": "1", "features": ["api_tokens", "resumable_uploads", "sync_cursors", "range_downloads", "remote_sync"], "auth_schemes": ["session", "bearer"], "limits": {"max_upload_bytes", "resumable_chunk_max_bytes", "resumable_upload_ttl_hours", "sync_change_retention_days"}}`. Nothing sensitive (no paths, no counts).
 - `GET /files/content` honours `Range: bytes=a-b` (206 + `Content-Range`), so media can be streamed and interrupted downloads resumed.
+
+A Postman collection that walks through all of Phase 6 (token, resumable upload, sync, expected failures, cleanup) is in [`docs/postman/nas-manager-phase6.postman_collection.json`](postman/nas-manager-phase6.postman_collection.json). Set its `password` variable and run the folders in order.
+
+## Remote connections (`remotes:read` / `remotes:write`)
+
+A connection describes how to reach one remote store. Non-secret settings go in `config`, secrets in `secrets`; responses never contain secret values, only `secrets_set` (the names of the secret fields that are stored). Endpoints that set or use credentials need `remotes:write`; **creating/updating connections, the SFTP host-key probe and the Google Drive OAuth flow also need an interactive session** (API tokens get 403).
+
+- `GET /remotes/providers` → the provider catalogue the UI renders its form from: `[{"name": "sftp", "label": "SFTP (SSH)", "oauth": false, "fields": [{"name": "host", "kind": "text", "required": true, "secret": false, ...}]}]`. Providers and their fields:
+
+| Provider | `config` | `secrets` |
+|---|---|---|
+| `sftp` | `host`*, `port` (22), `username`*, `base_path`, `host_key`* (`"<type> <base64>"`) | `password` and/or `private_key` (OpenSSH/PEM), `passphrase` |
+| `ftps` | `host`*, `port` (21), `username`*, `base_path`, `passive` (true) | `password` |
+| `ftp` | as `ftps` + `allow_insecure` (must be `true`: plain FTP sends the password in clear) | `password` |
+| `webdav` | `url`* (https; http only with `allow_insecure`), `username`, `allow_insecure` | `password` |
+| `s3` | `bucket`*, `prefix`, `region`, `endpoint_url` (non-AWS services), `addressing_style` (`auto`/`path`/`virtual`), `access_key_id`, `allow_insecure` | `secret_access_key` (required with `access_key_id`) |
+| `gdrive` | `client_id`*, `folder_id` (`root`) | `client_secret`* (the refresh token is set by the OAuth callback only) |
+
+- `GET /remotes` / `GET /remotes/{id}` →
+
+```json
+{"id": 1, "name": "Offsite", "provider": "sftp", "config": {"host": "backup.example.org", "port": 22, "username": "nas", "base_path": "/srv/nas", "host_key": "ssh-ed25519 AAAA..."},
+ "secrets_set": ["password"], "credentials_readable": true, "oauth_connected": null,
+ "last_tested_at": "...", "last_test_ok": true, "last_test_message": "Connected; 3 entries at the base path",
+ "job_count": 1, "created_at": "...", "updated_at": "..."}
+```
+
+  `credentials_readable: false` means the stored credentials cannot be decrypted with the configured key file (restore the key or re-enter them). `oauth_connected` is set for Google Drive only.
+- `POST /remotes` (session) — `{"name", "provider", "config": {...}, "secrets": {...}}` → 201. Unknown fields, secrets sent in `config`, invalid hosts/URLs/keys, plain FTP/HTTP without `allow_insecure` → 400; duplicate name → 409.
+- `PATCH /remotes/{id}` (session) — `{"name"?, "config"?, "secrets"?}`. `config` keys merge over the stored ones; in `secrets` a missing key keeps the stored value, `null`/`""` clears it. Changing a Drive `client_id` drops the refresh token.
+- `DELETE /remotes/{id}` → 204; 409 while sync jobs use it.
+- `POST /remotes/{id}/test` → `{"ok": bool, "message": "..."}` (connect and list the base path; stored as `last_test_*` and audited as `remote.tested`).
+- `GET /remotes/{id}/browse?path=backup` (`remotes:write`) → `{"path", "entries": [{"name", "path", "is_dir", "size", "modified"}], "rejected": 0}` (at most `NAS_REMOTE_BROWSE_LIMIT` entries).
+- `POST /remotes/sftp/host-key` (session) — `{"host", "port"}` → `{"host", "port", "key_type", "fingerprint": "SHA256:...", "host_key": "ssh-ed25519 AAAA..."}`. Compare the fingerprint with the server before storing `host_key`.
+- `POST /remotes/{id}/oauth/start` (session, Google Drive) → `{"authorization_url", "redirect_uri"}`. Needs `NAS_PUBLIC_BASE_URL` (else 500 explaining it). Open the URL in the browser; Google redirects to `GET /remotes/oauth/callback?state=&code=`, which stores the refresh token (encrypted) and redirects to `/remote-sync?oauth=connected` (or `?oauth=error&message=...`). The state is single-use, bound to the user who started the flow and valid for 10 minutes.
+
+Remote failures (unreachable host, refused login, changed SSH host key, HTTP errors) are `502 remote_error` with a credential-free message; the connection test reports them as `ok: false` instead.
+
+## Sync jobs (`remotes:read` / `remotes:write`)
+
+A job pairs a directory inside a managed file root with a folder on a connection. Runs are executed by the worker process (`python -m app.worker`); the API only queues them.
+
+- `POST /sync-jobs` — body:
+
+```json
+{"name": "Photos offsite", "connection_id": 1, "local_root": "/srv/files", "local_path": "photos",
+ "remote_path": "backup/photos", "direction": "push", "conflict_policy": "keep_both",
+ "delete_policy": "ignore", "exclude_patterns": ["*.tmp", "node_modules"],
+ "schedule_minutes": 60, "enabled": false, "confirm": false}
+```
+
+  `direction`: `push` (NAS → remote), `pull` (remote → NAS), `bidirectional`. `conflict_policy`: `keep_both` (default), `prefer_local`, `prefer_remote`. `delete_policy`: `ignore` (default; deletions are reported, never propagated) or `archive` (the other side's copy is moved into `.nas-sync-archive/job-<id>/<timestamp>/`). The local directory must exist inside a configured root (404 unknown root, 400 traversal/missing directory); remote paths are relative to the connection and may not contain `..`.
+  **Confirmation:** creating or changing a job so that it is enabled, two-way, archives deletions or uses a `prefer_*` policy returns `400 confirmation_required` with `details.warnings` (human-readable risks) unless the body has `confirm: true`. Risks already accepted are not asked again.
+- `GET /sync-jobs`, `GET /sync-jobs/{id}` → job objects (plus `next_run_at`, `last_run_at`, `last_status`).
+- `PATCH /sync-jobs/{id}` — any subset of the create fields (+ `confirm`). Changing the connection, local root/path or remote path resets the job's per-file sync records; changing those or the direction is refused while a run is active (409). `"schedule_minutes": null` makes the job manual-only.
+- `DELETE /sync-jobs/{id}` → 204 (job, sync records and history only; never touches files). 409 while a run is active.
+- `POST /sync-jobs/{id}/run` — `{"dry_run": false, "override_deletion_guard": false, "confirm": false}` → 202 with the queued run. 409 if the job already has a queued/running run. `override_deletion_guard` needs `confirm: true`.
+- `GET /sync-jobs/{id}/runs?limit=20` → newest first.
+- `GET /sync-runs/{id}` →
+
+```json
+{"id": 7, "job_id": 1, "status": "succeeded", "trigger": "manual", "dry_run": true, "cancel_requested": false,
+ "uploaded": 2, "downloaded": 1, "conflicts": 0, "archived": 0, "skipped": 0, "errors": 0, "bytes_transferred": 0,
+ "error": null, "created_at": "...", "started_at": "...", "finished_at": "...",
+ "summary": {"counts": {"upload": 2, "download": 1}, "actions": [{"op": "upload", "path": "2026/a.jpg", "reason": "new local file"}],
+             "truncated": false, "rejected": [], "local_files": 2, "remote_files": 1, "baseline_files": 0}}
+```
+
+  `status`: `queued`, `running`, `succeeded`, `partial` (some files failed; see `summary.problems`), `failed` (`error` says why, e.g. the deletion guard or an unreachable remote), `cancelled`. For dry runs the counters are the *planned* numbers and `summary.actions` the plan (at most `NAS_REMOTE_SYNC_PREVIEW_LIMIT` entries); `op` is `upload`, `download`, `resolve` (conflict candidate), `archive_local`, `archive_remote` or `skip` (with `reason`).
+- `POST /sync-runs/{id}/cancel` → a queued run becomes `cancelled` at once; a running one stops after its current file. 409 when already finished.
+- `GET /sync-jobs/{id}/conflicts?include_acknowledged=false` → `[{"id", "job_id", "run_id", "path", "kind", "resolution", "conflict_copy_path", "acknowledged", "created_at"}]`. `kind`: `both_modified`, `modified_vs_deleted`, `first_sync_differs`; `resolution`: `kept_both`, `local_won_remote_archived`, `remote_won_local_archived`, `kept_local`, `kept_remote`, `restored_to_remote`, `restored_to_local`.
+- `POST /sync-conflicts/{id}/acknowledge` → the conflict with `acknowledged: true`.
+- `GET /remote-sync/status` → `{"worker_online", "worker_heartbeat_at", "worker_heartbeat_age_seconds", "queued_runs", "running_runs", "public_base_url_set", "file_roots"}`.
+
+Audited under category `remote_sync`: `remote.created/updated/deleted/tested/oauth_connected/oauth_failed`, `sync_job.created/updated/deleted` (with `confirmed`), `sync_run.queued/cancel_requested/finished/failed`, `sync.conflict`, `sync.archived`, `sync.conflict_acknowledged`, `sync.deletion_guard_tripped`. Files written by pull runs appear in the Phase 6 change journal (`/sync/changes`).
+
+A Postman collection for Phase 7 is in [`docs/postman/nas-manager-phase7.postman_collection.json`](postman/nas-manager-phase7.postman_collection.json).
 
 ## Planned
 
-Cloud and remote synchronization (7), media libraries (8), streaming (9). Each phase will extend this document.
+Media libraries (8), streaming (9). Each phase will extend this document.

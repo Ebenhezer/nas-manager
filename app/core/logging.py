@@ -18,6 +18,7 @@ request_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 )
 
 LOG_FILE_NAME = "nas-manager.log"
+_QUIET_LOGGERS = ("paramiko", "botocore", "boto3", "s3transfer", "urllib3", "httpcore2", "httpx2")
 TEXT_FORMAT = "%(asctime)s %(levelname)s %(name)s [%(request_id)s] %(message)s"
 
 _RESERVED = set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {
@@ -82,7 +83,7 @@ def configure_logging(settings: Settings) -> None:
         log_dir.mkdir(parents=True, exist_ok=True, mode=0o750)
         handlers.append(
             RotatingFileHandler(
-                log_dir / LOG_FILE_NAME,
+                log_dir / settings.log_file_name,
                 maxBytes=settings.log_max_bytes,
                 backupCount=settings.log_backup_count,
                 encoding="utf-8",
@@ -94,3 +95,7 @@ def configure_logging(settings: Settings) -> None:
         setattr(handler, _HANDLER_MARK, True)
         root.addHandler(handler)
     root.setLevel(settings.log_level)
+    # Remote-sync client libraries (Phase 7) log every SSH handshake at INFO
+    # and request headers at DEBUG; keep them at WARNING whatever the app level.
+    for name in _QUIET_LOGGERS:
+        logging.getLogger(name).setLevel(max(logging.WARNING, root.level))

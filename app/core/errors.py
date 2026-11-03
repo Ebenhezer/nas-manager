@@ -90,6 +90,16 @@ class ServiceUnavailableError(AppError):
     code = "service_unavailable"
 
 
+class RemoteError(AppError):
+    """A remote store (SFTP, FTP, WebDAV, S3, Google Drive) refused or failed
+    an operation, or could not be reached (Phase 7). 502: the request was
+    fine, the upstream was not. Messages never contain credentials.
+    """
+
+    status_code = 502
+    code = "remote_error"
+
+
 def _request_id(request: Request) -> str | None:
     value = getattr(request.state, "request_id", None)
     return value if isinstance(value, str) else None

@@ -103,7 +103,7 @@ def test_current_revision_reports_diverged_rows(migrated_settings: Settings) -> 
         with db.engine.begin() as connection:
             connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('zzz')"))
         current = get_current_revision(db.engine)
-        assert current == "0006,zzz"
+        assert current == "0007,zzz"
         assert current != get_head_revision(migrated_settings)
     finally:
         db.dispose()
@@ -143,4 +143,34 @@ def test_alembic_cli_runs_from_project_root_and_creates_state_dir(
         timeout=60,
         check=False,
     )
-    assert "0006" in current.stdout + current.stderr
+    assert "0007" in current.stdout + current.stderr
+
+
+def test_phase7_downgrade_and_reupgrade(settings: Settings) -> None:
+    """0007 drops the remote-sync tables and grants on downgrade and re-applies cleanly."""
+    from sqlalchemy import text
+
+    settings.ensure_directories()
+    upgrade_to_head(settings)
+    tables = {"remote_connections", "sync_jobs", "sync_job_entries", "sync_runs", "sync_conflicts"}
+    grants_sql = text(
+        "SELECT r.name, p.permission FROM role_permissions p JOIN roles r ON r.id = p.role_id"
+        " WHERE p.permission LIKE 'remotes:%' ORDER BY 1, 2"
+    )
+    db = Database(settings.resolved_database_url)
+    try:
+        assert tables <= set(inspect(db.engine).get_table_names())
+        with db.engine.connect() as connection:
+            assert connection.execute(grants_sql).all() == [
+                ("admin", "remotes:read"),
+                ("admin", "remotes:write"),
+                ("operator", "remotes:read"),
+            ]
+        command.downgrade(alembic_config(settings), "0006")
+        assert not tables & set(inspect(db.engine).get_table_names())
+        with db.engine.connect() as connection:
+            assert connection.execute(grants_sql).all() == []
+        upgrade_to_head(settings)
+        assert get_current_revision(db.engine) == "0007"
+    finally:
+        db.dispose()

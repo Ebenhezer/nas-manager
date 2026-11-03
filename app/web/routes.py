@@ -251,6 +251,18 @@ def api_tokens_page(
     return templates.TemplateResponse(request, "api_tokens.html", _page_context(request, current))
 
 
+@router.get("/remote-sync", response_class=HTMLResponse)
+def remote_sync_page(
+    request: Request, current: CurrentUser | None = Depends(resolve_web_user)
+) -> Response:
+    redirect = _protected(current)
+    if redirect is not None:
+        return redirect
+    if current is None or "remotes:read" not in current.permissions:
+        raise UnauthorizedError("Missing required permission: remotes:read")
+    return templates.TemplateResponse(request, "remote_sync.html", _page_context(request, current))
+
+
 @router.get("/profile", response_class=HTMLResponse)
 def profile_page(
     request: Request, current: CurrentUser | None = Depends(resolve_web_user)

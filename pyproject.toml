@@ -14,7 +14,8 @@ extend-exclude = [".venv", "data"]
 select = ["E", "F", "W", "I", "UP", "B", "S", "SIM", "C4", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S105", "S106"]
+# Tests use fixed fake passwords (S107) and a fake ftplib (S321).
+"tests/**" = ["S101", "S105", "S106", "S107", "S321"]
 # FastAPI dependency injection conventionally uses Depends() in defaults.
 "app/api/**" = ["B008"]
 "app/web/routes.py" = ["B008"]

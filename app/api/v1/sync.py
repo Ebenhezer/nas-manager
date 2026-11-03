@@ -16,7 +16,13 @@ router = APIRouter(prefix="/sync", tags=["sync"])
 info_router = APIRouter(tags=["info"])
 
 API_VERSION = "1"
-FEATURES = ["api_tokens", "resumable_uploads", "sync_cursors", "range_downloads"]
+FEATURES = [
+    "api_tokens",
+    "resumable_uploads",
+    "sync_cursors",
+    "range_downloads",
+    "remote_sync",
+]
 
 
 @router.get("/cursor", response_model=SyncCursor)
