@@ -51,10 +51,12 @@ from app.core.errors import (
     QuotaExceededError,
 )
 from app.db.base import utcnow_naive
-from app.models import ApiToken, PublicUploadFile, UploadSession, User
-from app.models.upload_session import TARGET_FILES, TARGET_PUBLIC
+from app.models import ApiToken, MediaItem, PublicUploadFile, UploadSession, User
+from app.models.upload_session import TARGET_FILES, TARGET_MEDIA, TARGET_PUBLIC
 from app.schemas.files import FileEntry
 from app.services import audit, files, public_uploads, sync
+from app.services.media import libraries as media_libraries
+from app.services.media import uploads as media_uploads
 
 _HASH_CHUNK = 1024 * 1024
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -94,6 +96,9 @@ def staged_path(settings: Settings, row: UploadSession) -> Path:
     if row.target == TARGET_FILES:
         root = files.resolve_root(settings, row.root)
         directory = files.resolve_in_root(root, row.rel_dir)
+    elif row.target == TARGET_MEDIA:
+        folder = media_uploads.personal_folder(settings, row.root)
+        directory = files.resolve_in_root(folder, row.rel_dir)
     else:
         directory = public_uploads.uploader_dir(settings, row.root)
     return directory / f"{files.RESUMABLE_TMP_PREFIX}{row.id}.part"
@@ -181,8 +186,21 @@ def create_upload(
             )
         public_uploads.uploader_dir(settings, key).mkdir(parents=True, exist_ok=True, mode=0o750)
         row = UploadSession(target=TARGET_PUBLIC, root=key, rel_dir="", filename=name)
+    elif target == TARGET_MEDIA:
+        if size > settings.max_upload_bytes:
+            raise BadRequestError(
+                f"Upload exceeds the limit of {settings.max_upload_bytes} bytes",
+                details={"max_bytes": settings.max_upload_bytes},
+            )
+        library = media_libraries.ensure_personal_library(session, settings, user)
+        name = media_uploads.clean_filename(filename)
+        parts = media_uploads.subfolder_parts(path or None, None)
+        media_uploads.target_directory(settings, library, parts)
+        row = UploadSession(
+            target=TARGET_MEDIA, root=user.username, rel_dir="/".join(parts), filename=name
+        )
     else:
-        raise BadRequestError("target must be 'files' or 'public'")
+        raise BadRequestError("target must be 'files', 'public' or 'media'")
 
     now = utcnow_naive()
     row.id = uuid.uuid4().hex
@@ -327,7 +345,7 @@ def complete_upload(
     actor: User,
     sha256: str | None = None,
     context: dict[str, str | None] | None = None,
-) -> FileEntry | PublicUploadFile:
+) -> FileEntry | PublicUploadFile | MediaItem:
     """Verify and commit a fully received upload into its destination."""
     with _upload_lock(row.id):
         staged = staged_path(settings, row)
@@ -375,6 +393,19 @@ def complete_upload(
                     staged=staged,
                     size=size,
                     overwrite=row.overwrite,
+                    actor=actor,
+                    context=context,
+                )
+            if row.target == TARGET_MEDIA:
+                return media_uploads.commit_staged(
+                    session,
+                    settings,
+                    library=media_libraries.ensure_personal_library(session, settings, actor),
+                    directory=staged.parent,
+                    filename=row.filename,
+                    staged=staged,
+                    size=size,
+                    taken_at=None,
                     actor=actor,
                     context=context,
                 )

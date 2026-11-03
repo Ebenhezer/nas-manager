@@ -5,6 +5,7 @@ Target: Ubuntu 24.04 LTS (Python 3.12+). Development was verified on Python 3.13
 ## Development
 
 ```bash
+sudo apt install ffmpeg         # optional: video metadata, posters and transcoding (Phase 9)
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
 cp .env.example .env            # edit as needed; NAS_ENVIRONMENT=development is convenient
@@ -115,6 +116,20 @@ journalctl -u nas-manager-worker -n 50 --no-pager
 - **Google Drive:** in Google Cloud Console create an OAuth client of type *Web application* with the redirect URI `https://<your NAS URL>/api/v1/remotes/oauth/callback` (enable the Google Drive API for the project). Set `NAS_PUBLIC_BASE_URL=https://<your NAS URL>` in `/etc/nas-manager/nas-manager.env`, restart `nas-manager`, create a Google Drive connection with the client id and secret, then click **Connect** and grant access. The scope is full Drive access (`https://www.googleapis.com/auth/drive`) so existing folders can be synced. The callback identifies you by your session cookie, which the browser only sends on Google's redirect with `NAS_SESSION_COOKIE_SAMESITE=lax` (the default); with `strict` the callback answers 401.
 - Create jobs disabled, run **Preview** (a dry run that lists every planned action), and only then **Run now** or enable a schedule.
 
+### Photo gallery and video (Phases 8–9)
+
+The gallery needs no extra service: the worker above scans libraries, renders thumbnails and runs transcodes. Pillow is a pinned Python dependency (installed with `requirements.txt`); ffmpeg is a system package:
+
+```bash
+sudo apt install ffmpeg     # ffprobe + ffmpeg; without them videos are indexed and downloadable only
+ffmpeg -version | head -1   # the gallery's admin status shows the same line
+```
+
+- **Where media lives.** Personal libraries: `NAS_MEDIA_DIR/<username>` (default `/var/lib/nas-manager/media`). Thumbnails, posters and transcodes: `NAS_MEDIA_CACHE_DIR` (default `/var/lib/nas-manager/media-cache`, disposable). If you put either elsewhere (e.g. a large data disk), add the path to `ReadWritePaths=` in **both** units (`systemctl edit nas-manager` and `systemctl edit nas-manager-worker`): the web process writes uploads and on-demand thumbnails, the worker writes scans, thumbnails and transcodes.
+- **Shared libraries** are folders inside a configured file root (`NAS_FILE_ROOTS`). Create them in the Gallery's *Libraries* card (administrators), pick the groups that may browse them, and let the worker index them (`NAS_MEDIA_SCAN_INTERVAL_MINUTES`, default hourly; **Rescan** forces it). Files copied in over Samba appear after the next scan.
+- **Transcoding** is CPU-heavy. The worker unit runs at `Nice=10` and one transcode at a time; tune `NAS_MEDIA_TRANSCODE_PRESET`, `_CRF`, `_MAX_HEIGHT`, `_THREADS` and cap the cache with `NAS_MEDIA_TRANSCODE_CACHE_MAX_BYTES`. Set `NAS_MEDIA_TRANSCODE_ENABLED=false` to serve only browser-compatible videos.
+- **Phones.** A backup app authenticates with a personal API token scoped `media:read` + `media:write`, asks `POST /api/v1/media/sync/lookup` which photos are already on the NAS, and uploads the rest (`POST /api/v1/media/upload` or resumable uploads with `target: "media"`); see `API.md`.
+
 Verify:
 
 ```bash
@@ -126,13 +141,14 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/login   # 200
 
 ### Troubleshooting
 
-The unit applies strict sandboxing (`SystemCallFilter`, `MemoryDenyWriteExecute`, `ProtectSystem=strict`) that was validated with `systemd-analyze` but **not run under a live systemd**. If the service exits with `SIGSYS`, an `mprotect`/`mmap` error or a "read-only file system" error in `journalctl -u nas-manager`, relax the corresponding directive with a drop-in (`systemctl edit nas-manager`) and report which one was needed.
+The unit applies strict sandboxing (`SystemCallFilter`, `MemoryDenyWriteExecute`, `ProtectSystem=strict`) that was validated with `systemd-analyze` but **not run under a live systemd**. ffmpeg/ffprobe under these sandboxes (web and worker units) is likewise unverified on a real host: if probing or transcoding fails only under systemd, check `journalctl` for `SIGSYS`/`mprotect` errors and the media status card's last transcode error. If the service exits with `SIGSYS`, an `mprotect`/`mmap` error or a "read-only file system" error in `journalctl -u nas-manager`, relax the corresponding directive with a drop-in (`systemctl edit nas-manager`) and report which one was needed.
 
 ## Upgrading
 
 1. Back up `/var/lib/nas-manager` (see `BACKUP_AND_RESTORE.md`).
 2. Replace application files, reinstall `requirements.txt`.
 3. `sudo systemctl restart nas-manager` (migrations apply automatically), then `sudo systemctl restart nas-manager-worker` if the sync worker is installed.
+4. After upgrading to Phase 9 with ffmpeg installed, videos indexed earlier are probed on their library's next scan (or press **Rescan**).
 
 ## Dependency pinning
 

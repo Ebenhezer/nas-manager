@@ -69,6 +69,8 @@ def test_management_pages_require_authentication(client: TestClient) -> None:
         "/uploads",
         "/tokens",
         "/remote-sync",
+        "/gallery",
+        "/videos",
     ]:
         response = client.get(path, follow_redirects=False)
         assert response.status_code == 302, path
@@ -96,6 +98,8 @@ def test_dashboard_has_no_inline_script_or_style(page: TestClient) -> None:
         "/tokens",
         "/profile",
         "/remote-sync",
+        "/gallery",
+        "/videos",
     ],
 )
 def test_phase3_pages_have_no_inline_script_or_style(page: TestClient, path: str) -> None:
@@ -130,6 +134,21 @@ def test_remote_sync_page_has_every_element_its_script_uses(page: TestClient) ->
     assert missing == []
 
 
+def test_gallery_page_has_every_element_its_script_uses(page: TestClient) -> None:
+    """gallery.js looks elements up by id; the admin view must render all of them."""
+    import re
+
+    response = page.get("/gallery")
+    assert response.status_code == 200
+    html = response.text
+    script = (STATIC_DIR / "js" / "gallery.js").read_text()
+    ids = set(re.findall(r'getElementById\("([a-z0-9-]+)"\)', script))
+    assert ids, "expected getElementById lookups"
+    missing = sorted(i for i in ids if f'id="{i}"' not in html)
+    assert missing == []
+    assert 'href="/gallery"' in html  # nav link
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -150,6 +169,7 @@ def test_remote_sync_page_has_every_element_its_script_uses(page: TestClient) ->
         "/static/js/uploads.js",
         "/static/js/public_upload.js",
         "/static/js/remote_sync.js",
+        "/static/js/gallery.js",
         "/static/vendor/bootstrap/bootstrap.min.css",
         "/static/vendor/bootstrap/bootstrap.bundle.min.js",
     ],

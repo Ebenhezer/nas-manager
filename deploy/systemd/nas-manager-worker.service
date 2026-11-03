@@ -34,9 +34,17 @@ LogsDirectory=nas-manager
 LogsDirectoryMode=0750
 UMask=0027
 
-# Same sandbox as the web unit. Managed file roots outside /var/lib/nas-manager
-# must be listed here too, e.g.:
-# ReadWritePaths=/srv/nas
+# The worker also scans media libraries, renders thumbnails and runs ffmpeg
+# transcodes (Phases 8-9). Run it at a lower CPU and I/O priority than the
+# web unit so a long transcode never makes the UI or Samba sluggish; ffmpeg
+# inherits these (it cannot lower its own priority under ~@resources).
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+# Same sandbox as the web unit. Managed file roots, NAS_MEDIA_DIR and
+# NAS_MEDIA_CACHE_DIR outside /var/lib/nas-manager must be listed here too, e.g.:
+# ReadWritePaths=/srv/nas /srv/media
 NoNewPrivileges=true
 CapabilityBoundingSet=
 AmbientCapabilities=

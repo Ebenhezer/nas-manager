@@ -3,7 +3,9 @@
 
 Authentication is a session or an API token. The ``files`` target requires
 ``files:write`` at every step (so revoking the permission stops an upload in
-flight); the ``public`` target is charged to the caller's drop-folder quota.
+flight); the ``public`` target is charged to the caller's drop-folder quota;
+the ``media`` target (Phase 8) requires ``media:write`` the same way and
+lands in the caller's personal media library.
 """
 
 from __future__ import annotations
@@ -20,9 +22,10 @@ from app.api.v1.deps import (
 from app.core.config import Settings
 from app.core.errors import BadRequestError, ForbiddenError
 from app.db.dependencies import get_db
-from app.models import UploadSession
-from app.models.upload_session import TARGET_FILES
+from app.models import MediaItem, UploadSession
+from app.models.upload_session import TARGET_FILES, TARGET_MEDIA
 from app.schemas.files import FileEntry
+from app.schemas.media import MediaItemOut
 from app.schemas.public_uploads import PublicUploadResult
 from app.schemas.uploads import (
     UploadCleanupResult,
@@ -55,10 +58,14 @@ def _offset_headers(response: Response, row: UploadSession) -> None:
     response.headers["Cache-Control"] = "no-store"
 
 
+_TARGET_PERMISSIONS = {TARGET_FILES: "files:write", TARGET_MEDIA: "media:write"}
+
+
 def _require_target_permission(current: CurrentUser, target: str) -> None:
-    if target == TARGET_FILES and "files:write" not in current.permissions:
+    needed = _TARGET_PERMISSIONS.get(target)
+    if needed is not None and needed not in current.permissions:
         raise ForbiddenError(
-            "Missing required permission: files:write", details={"permission": "files:write"}
+            f"Missing required permission: {needed}", details={"permission": needed}
         )
 
 
@@ -176,6 +183,8 @@ def complete_upload(
     )
     if isinstance(result, FileEntry):
         return UploadCompleted(target=target, file=result)
+    if isinstance(result, MediaItem):
+        return UploadCompleted(target=target, media=MediaItemOut.model_validate(result))
     return UploadCompleted(target=target, public=PublicUploadResult.model_validate(result))
 
 

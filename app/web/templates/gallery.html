@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+{% block title %}{{ page_title }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
+  <h1 class="h3 mb-0">{{ page_title }}</h1>
+  <div class="d-flex flex-wrap gap-2">
+    {% if can('media:write') %}
+    <button type="button" class="btn btn-sm btn-primary" id="upload-button">Upload</button>
+    {% endif %}
+    <button type="button" class="btn btn-sm btn-outline-secondary" id="rescan-button" disabled>Rescan library</button>
+  </div>
+</div>
+<div id="error-banner" class="alert alert-danger d-none" role="alert"></div>
+<div id="info-banner" class="alert alert-info d-none" role="status"></div>
+
+<div id="gallery-root"
+     data-can-write="{{ 'true' if can('media:write') else 'false' }}"
+     data-is-admin="{{ 'true' if can('media:admin') else 'false' }}"
+     data-can-list-roots="{{ 'true' if can('files:read') else 'false' }}"
+     data-can-list-groups="{{ 'true' if can('groups:read') else 'false' }}"
+     data-default-kind="{{ default_kind }}">
+
+  {% if can('media:write') %}
+  <div id="drop-zone" class="gallery-drop-zone mb-3">
+    <input type="file" id="upload-input" class="d-none" multiple accept="image/*,video/*">
+    <span>Drop photos or videos here to add them to your personal library.</span>
+    <span id="upload-status" class="small text-body-secondary"></span>
+  </div>
+  {% endif %}
+
+  <form id="filter-form" class="row g-2 align-items-end mb-3" role="search">
+    <div class="col-12 col-md-3">
+      <label class="form-label small" for="library-select">Library</label>
+      <select class="form-select form-select-sm" id="library-select">
+        <option value="">All libraries</option>
+      </select>
+    </div>
+    <div class="col-12 col-md-3">
+      <label class="form-label small" for="search-q">Search</label>
+      <input type="search" class="form-control form-control-sm" id="search-q" maxlength="255" placeholder="File name, folder or camera">
+    </div>
+    <div class="col-6 col-md-2">
+      <label class="form-label small" for="kind-select">Type</label>
+      <select class="form-select form-select-sm" id="kind-select">
+        <option value="">Photos and videos</option>
+        <option value="image">Photos</option>
+        <option value="video">Videos</option>
+      </select>
+    </div>
+    <div class="col-6 col-md-2">
+      <label class="form-label small" for="album-select">Album</label>
+      <select class="form-select form-select-sm" id="album-select">
+        <option value="">Any</option>
+      </select>
+    </div>
+    <div class="col-6 col-md-2">
+      <label class="form-label small" for="sort-select">Sort</label>
+      <select class="form-select form-select-sm" id="sort-select">
+        <option value="taken_desc">Newest first</option>
+        <option value="taken_asc">Oldest first</option>
+        <option value="name">Name</option>
+        <option value="size_desc">Largest first</option>
+      </select>
+    </div>
+    <div class="col-6 col-md-3">
+      <label class="form-label small" for="date-from">Taken from</label>
+      <input type="date" class="form-control form-control-sm" id="date-from">
+    </div>
+    <div class="col-6 col-md-3">
+      <label class="form-label small" for="date-to">Taken until</label>
+      <input type="date" class="form-control form-control-sm" id="date-to">
+    </div>
+  </form>
+
+  <p class="small text-body-secondary" id="result-count" aria-live="polite"></p>
+  <div id="gallery-grid" class="gallery-grid mb-3"></div>
+  <div class="text-center mb-4">
+    <button type="button" class="btn btn-outline-secondary btn-sm d-none" id="load-more">Load more</button>
+  </div>
+
+  <div class="card mb-4">
+    <div class="card-header">My albums</div>
+    <div class="card-body">
+      <ul class="list-unstyled d-flex flex-wrap gap-2 mb-3" id="albums-list"></ul>
+      {% if can('media:write') %}
+      <form id="album-form" class="row g-2">
+        <div class="col-8 col-md-4">
+          <label class="visually-hidden" for="album-name">New album name</label>
+          <input type="text" class="form-control form-control-sm" id="album-name" maxlength="128" placeholder="New album name" required>
+        </div>
+        <div class="col-auto">
+          <button type="submit" class="btn btn-sm btn-primary">Create album</button>
+        </div>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if can('media:admin') %}
+  <div class="card mb-4">
+    <div class="card-header d-flex align-items-center justify-content-between">
+      <span>Libraries</span>
+      <span class="small text-body-secondary" id="media-status"></span>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-striped align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Kind</th>
+            <th>Folder</th>
+            <th>Items</th>
+            <th>Last scan</th>
+            <th class="text-end">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="libraries-body"></tbody>
+      </table>
+    </div>
+    <div class="card-body border-top">
+      <h2 class="h6">Add a shared library</h2>
+      <form id="library-form" class="row g-2 align-items-end">
+        <div class="col-12 col-md-3">
+          <label class="form-label small" for="library-name">Name</label>
+          <input type="text" class="form-control form-control-sm" id="library-name" maxlength="64" required>
+        </div>
+        <div class="col-12 col-md-3">
+          <label class="form-label small" for="library-root">File root</label>
+          <select class="form-select form-select-sm" id="library-root" required></select>
+        </div>
+        <div class="col-12 col-md-3">
+          <label class="form-label small" for="library-path">Folder inside the root</label>
+          <input type="text" class="form-control form-control-sm" id="library-path" maxlength="4096" placeholder="e.g. Photos/Family">
+        </div>
+        <div class="col-12 col-md-3">
+          <label class="form-label small" for="library-groups">Groups with access</label>
+          <select class="form-select form-select-sm" id="library-groups" multiple size="3"></select>
+        </div>
+        <div class="col-12 col-md-6">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="library-videos" checked>
+            <label class="form-check-label small" for="library-videos">Include videos</label>
+          </div>
+        </div>
+        <div class="col-12 col-md-6 text-md-end">
+          <button type="submit" class="btn btn-sm btn-primary">Add library</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<div class="modal fade" id="viewer-modal" tabindex="-1" aria-labelledby="viewer-title" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title h5 text-truncate" id="viewer-title"></h2>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-3">
+          <div class="col-12 col-lg-8 gallery-viewer">
+            <img id="viewer-image" class="d-none" alt="">
+            <video id="viewer-video" class="d-none" controls preload="metadata"></video>
+            <div id="viewer-video-status" class="d-none text-center p-4">
+              <p id="viewer-video-message" class="mb-2"></p>
+              <button type="button" class="btn btn-sm btn-primary d-none" id="viewer-transcode">Prepare for playback</button>
+            </div>
+          </div>
+          <div class="col-12 col-lg-4">
+            <dl class="row small mb-3" id="viewer-meta"></dl>
+            <div class="input-group input-group-sm mb-2">
+              <label class="input-group-text" for="viewer-album">Album</label>
+              <select class="form-select" id="viewer-album"></select>
+              <button type="button" class="btn btn-outline-primary" id="viewer-add-album">Add</button>
+            </div>
+            <button type="button" class="btn btn-sm btn-outline-secondary d-none mb-2" id="viewer-remove-album">Remove from this album</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer justify-content-between">
+        <div class="d-flex gap-2">
+          <button type="button" class="btn btn-outline-secondary" id="viewer-prev">Previous</button>
+          <button type="button" class="btn btn-outline-secondary" id="viewer-next">Next</button>
+        </div>
+        <div class="d-flex gap-2">
+          <a class="btn btn-outline-primary" id="viewer-download" href="#">Download</a>
+          <button type="button" class="btn btn-outline-danger d-none" id="viewer-delete">Delete</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script type="module" src="{{ url_for('static', path='js/gallery.js') }}"></script>
+{% endblock %}

@@ -11,6 +11,7 @@ from app.core.config import Settings
 from app.db.dependencies import get_db
 from app.schemas.sync import FileChangeOut, ServerInfo, ServerLimits, SyncChanges, SyncCursor
 from app.services import files, sync
+from app.services.media import transcode
 
 router = APIRouter(prefix="/sync", tags=["sync"])
 info_router = APIRouter(tags=["info"])
@@ -22,6 +23,8 @@ FEATURES = [
     "sync_cursors",
     "range_downloads",
     "remote_sync",
+    "media_gallery",
+    "video_streaming",
 ]
 
 
@@ -62,7 +65,7 @@ def server_info(request: Request) -> ServerInfo:
         name=settings.app_name,
         version=__version__,
         api_version=API_VERSION,
-        features=FEATURES,
+        features=[*FEATURES, *(["video_transcoding"] if transcode.is_available(settings) else [])],
         auth_schemes=["session", "bearer"],
         limits=ServerLimits(
             max_upload_bytes=settings.max_upload_bytes,

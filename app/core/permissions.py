@@ -32,6 +32,9 @@ PERMISSIONS: list[str] = [
     "api_tokens:write",
     "remotes:read",
     "remotes:write",
+    "media:read",
+    "media:write",
+    "media:admin",
 ]
 
 ALL_PERMISSIONS: frozenset[str] = frozenset(PERMISSIONS)
@@ -40,9 +43,10 @@ ROLE_DESCRIPTIONS: dict[str, str] = {
     "admin": "Full access to every managed resource, including user and group management.",
     "operator": (
         "Read access to users, groups, roles, audit log, system, settings, public upload usage"
-        ", API token metadata and remote sync status (never remote credentials)."
+        ", API token metadata and remote sync status (never remote credentials)"
+        "; their own photo and video library."
     ),
-    "viewer": "Read-only access to the dashboard.",
+    "viewer": "Read-only access to the dashboard; their own photo and video library.",
 }
 
 ROLE_DEFAULT_PERMISSIONS: dict[str, list[str]] = {
@@ -59,8 +63,10 @@ ROLE_DEFAULT_PERMISSIONS: dict[str, list[str]] = {
         "disks:read",
         "api_tokens:read",
         "remotes:read",
+        "media:read",
+        "media:write",
     ],
-    "viewer": ["dashboard:read"],
+    "viewer": ["dashboard:read", "media:read", "media:write"],
 }
 
 # Roles created by migrations that cannot be renamed or deleted by the API.

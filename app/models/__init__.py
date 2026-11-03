@@ -6,6 +6,15 @@ from app.models.associations import group_roles, user_groups, user_roles
 from app.models.audit_event import AuditEvent
 from app.models.file_change import FileChange
 from app.models.group import Group
+from app.models.media import (
+    MediaAlbum,
+    MediaAlbumItem,
+    MediaChange,
+    MediaItem,
+    MediaLibrary,
+    MediaTranscode,
+    media_library_groups,
+)
 from app.models.public_upload import PublicUploadFile, PublicUploadQuota
 from app.models.remote import (
     RemoteConnection,
@@ -27,6 +36,12 @@ __all__ = [
     "AuthSession",
     "FileChange",
     "Group",
+    "MediaAlbum",
+    "MediaAlbumItem",
+    "MediaChange",
+    "MediaItem",
+    "MediaLibrary",
+    "MediaTranscode",
     "PublicUploadFile",
     "PublicUploadQuota",
     "RemoteConnection",
@@ -40,6 +55,7 @@ __all__ = [
     "UploadSession",
     "User",
     "group_roles",
+    "media_library_groups",
     "user_groups",
     "user_roles",
 ]

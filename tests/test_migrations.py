@@ -103,7 +103,7 @@ def test_current_revision_reports_diverged_rows(migrated_settings: Settings) -> 
         with db.engine.begin() as connection:
             connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('zzz')"))
         current = get_current_revision(db.engine)
-        assert current == "0007,zzz"
+        assert current == "0009,zzz"
         assert current != get_head_revision(migrated_settings)
     finally:
         db.dispose()
@@ -143,7 +143,7 @@ def test_alembic_cli_runs_from_project_root_and_creates_state_dir(
         timeout=60,
         check=False,
     )
-    assert "0007" in current.stdout + current.stderr
+    assert "0009" in current.stdout + current.stderr
 
 
 def test_phase7_downgrade_and_reupgrade(settings: Settings) -> None:
@@ -171,6 +171,66 @@ def test_phase7_downgrade_and_reupgrade(settings: Settings) -> None:
         with db.engine.connect() as connection:
             assert connection.execute(grants_sql).all() == []
         upgrade_to_head(settings)
-        assert get_current_revision(db.engine) == "0007"
+        assert get_current_revision(db.engine) == get_head_revision(settings)
+    finally:
+        db.dispose()
+
+
+def test_phase8_downgrade_and_reupgrade(settings: Settings) -> None:
+    """0008 drops the media tables and every media:* grant, and re-applies cleanly."""
+    from sqlalchemy import text
+
+    settings.ensure_directories()
+    upgrade_to_head(settings)
+    tables = {
+        "media_libraries",
+        "media_library_groups",
+        "media_items",
+        "media_albums",
+        "media_album_items",
+        "media_changes",
+    }
+    grants_sql = text(
+        "SELECT r.name, p.permission FROM role_permissions p JOIN roles r ON r.id = p.role_id"
+        " WHERE p.permission LIKE 'media:%' ORDER BY 1, 2"
+    )
+    db = Database(settings.resolved_database_url)
+    try:
+        assert tables <= set(inspect(db.engine).get_table_names())
+        with db.engine.connect() as connection:
+            assert connection.execute(grants_sql).all() == [
+                ("admin", "media:admin"),
+                ("admin", "media:read"),
+                ("admin", "media:write"),
+                ("operator", "media:read"),
+                ("operator", "media:write"),
+                ("viewer", "media:read"),
+                ("viewer", "media:write"),
+            ]
+        command.downgrade(alembic_config(settings), "0007")
+        assert not tables & set(inspect(db.engine).get_table_names())
+        with db.engine.connect() as connection:
+            assert connection.execute(grants_sql).all() == []
+        upgrade_to_head(settings)
+        assert get_current_revision(db.engine) == get_head_revision(settings)
+    finally:
+        db.dispose()
+
+
+def test_phase9_downgrade_and_reupgrade(settings: Settings) -> None:
+    """0009 drops media_transcodes and the playback/rotation columns, and re-applies."""
+    settings.ensure_directories()
+    upgrade_to_head(settings)
+    db = Database(settings.resolved_database_url)
+    try:
+        assert "media_transcodes" in inspect(db.engine).get_table_names()
+        columns = {c["name"] for c in inspect(db.engine).get_columns("media_items")}
+        assert {"playback", "rotation"} <= columns
+        command.downgrade(alembic_config(settings), "0008")
+        assert "media_transcodes" not in inspect(db.engine).get_table_names()
+        columns = {c["name"] for c in inspect(db.engine).get_columns("media_items")}
+        assert not {"playback", "rotation"} & columns
+        upgrade_to_head(settings)
+        assert get_current_revision(db.engine) == "0009"
     finally:
         db.dispose()

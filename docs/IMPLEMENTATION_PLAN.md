@@ -13,9 +13,9 @@ Status legend: **Done** (implemented and verified), **Next**, **Planned**.
 | 5 | Disk discovery, storage and RAID management (+ privileged helper) | **Done** |
 | 6 | REST API, API tokens, mobile-client support | **Done** |
 | 7 | Cloud and remote synchronization (+ sync worker) | **Done** |
-| 8 | Photo gallery and personal media libraries | **Next** |
-| 9 | Video playback and streaming | Planned |
-| 10 | System monitoring and alerting | Planned |
+| 8 | Photo gallery and personal media libraries | **Done** |
+| 9 | Video playback and streaming | **Done** |
+| 10 | System monitoring and alerting | **Next** |
 | 11 | Backup and restore | Planned |
 | 12 | Configuration export and import | Planned |
 | 13 | Syslog and comprehensive auditing | Planned |
@@ -184,19 +184,28 @@ Delivered:
 28. **Trust is explicit.** SFTP host keys are pinned (probe → administrator confirms the fingerprint → `RejectPolicy`); plain FTP and plain HTTP need `allow_insecure`; Google Drive uses authorization code + PKCE with a single-use, user-bound, 10-minute state. Risky job settings (enabling, two-way, archive, `prefer_*`, overriding the deletion guard) need `confirm: true`, and the 400 response lists the risks so the UI can show them.
 29. **Providers are thin and testable.** One `RemoteProvider` interface; WebDAV and Drive use `httpx2` directly (no Google client libraries) so tests can drive them with `MockTransport`; S3 uses boto3 (tested with botocore's `Stubber`); SFTP is tested against a real paramiko SFTP server over loopback.
 
+30. **Personal libraries are private, shared libraries are granted.** Each user's library is `<NAS_MEDIA_DIR>/<username>` and only its owner browses it — administrators manage the record (counts, scans) but cannot open other users' photos. Shared libraries are registered over existing file-root folders, granted per group, and read-only through the gallery (they are maintained with the file manager, Samba or remote sync).
+31. **Not visible = not found.** Every item, thumbnail, original, stream, transcode and album lookup goes through one SQL clause (`browsable_clause`), and anything outside it is a 404, so IDs cannot be probed. Albums are private and silently drop items whose library access was revoked.
+32. **The index is derived; the files are the truth.** Scans never follow symlinks, skip hidden entries and only re-read changed files; removing a row never touches a file. A missing folder, an interrupted walk, unreadable directories or an empty folder where ≥ 10 items were indexed (an unmounted disk) remove nothing.
+33. **Caches are keyed by content fingerprint.** Thumbnails and transcodes carry a hash of the source's size and mtime in their file name, so a changed file can never be served a stale thumbnail or rendition; orphans are pruned hourly and the transcode cache is evicted least recently streamed first.
+34. **Phone backup is hash-first.** Clients ask `POST /media/sync/lookup` which SHA-256 digests exist and upload only the rest (multipart or resumable `media` target); uploads never overwrite (hard-link placement, collision suffixes) and journal into `media_changes`, which pages like the Phase 6 file journal.
+35. **ffmpeg is quarantined in one module.** Fixed argument lists, no shell, `file:` inputs/outputs, minimal environment, timeouts and kill-on-stop; ffprobe runs on upload (web) and scan (worker), posters and transcodes only in the worker on their own single-thread pools at `Nice=10`. Without ffmpeg, videos still index and download.
+36. **Progressive MP4, not HLS.** Browser-compatible originals stream as they are with HTTP Range; everything else gets one cached H.264/AAC `+faststart` MP4, which `<video>` can seek with Range as well. Adaptive bitrate streaming was judged not worth its complexity and storage for a home NAS.
+
 ## Known limitations
 
-- The management UI was exercised via TestClient and curl, not a real browser.
+- The management UI (including the gallery and video player) was exercised via TestClient and curl, not a real browser.
 - Only SQLite has been exercised; PostgreSQL support is configuration-only so far.
 - `instance_id` is stored but not yet used by any feature.
 - The per-IP login limiter is in-process (single process; resets on restart). The account lockout is persistent in the database.
 - The bearer-failure throttle and the per-upload resumable lock are in-process; a multi-process deployment needs shared state for both.
 - The sync journal records only changes made through the application; edits over Samba or directly on disk are not journaled (clients should re-list periodically).
 - Monitoring is limited to CPU, memory, swap, disk-usage entries and network byte counters; per-disk and RAID *discovery* exists (Phase 5) but there are no processes, services, RAID health curation or alerting yet (Phase 10).
-- The sync worker is a single process (`NAS_WORKER_CONCURRENCY` threads); several workers on one database are safe (atomic claims, leases) but were only exercised as one process. Other housekeeping (resumable-upload expiry, journal pruning) still runs on request, not in the worker.
+- The sync worker is a single process (`NAS_WORKER_CONCURRENCY` threads); several workers on one database are safe (atomic claims, leases) but were only exercised as one process. Resumable-upload expiry and file-journal pruning still run on request; media journal and cache pruning run in the worker.
 - Remote sync limitations (Phase 7): empty directories are not synced; renames are seen as a new file plus a deletion (so with `delete_policy=ignore` the old name stays on the other side); files changed outside the sync between scan and transfer are skipped until the next run; FTP needs `MLSD`; Google Drive skips Google-native documents and duplicate names; there is no bandwidth limit, no per-file size cap and no partial-file resume for remote transfers (an interrupted file restarts); the credentials key cannot be rotated yet.
 - `smbd` reload is performed by the Phase 5 helper when `NAS_HELPER_ENABLED=true`; without the helper the web process still writes where it can and reports `reload_required`.
 - The file manager has no per-share or per-user folder permissions yet; access is governed by the `files:*`/`samba:*` permissions and the operator toggle. Only the helper can mount/umount disks; there is no fstab persistence or auto-mount yet.
+- Media (Phases 8–9): HEIC/HEIF photos are indexed and downloadable but get no thumbnail (Pillow has no HEIF decoder here); albums cannot be shared; personal libraries have no quota; EXIF GPS is shown to everyone who can browse a library and is not stripped from downloads; changes made outside the gallery (file manager, Samba, remote sync) appear only after the next scan (`NAS_MEDIA_SCAN_INTERVAL_MINUTES`); `taken_at` from EXIF is camera wall-clock time without a zone. Video: one progressive MP4 rendition (no HLS/adaptive bitrate, no subtitles or multiple audio tracks), one transcode at a time per worker, and transcode progress is reported only when the duration is known.
 - Anonymous public-upload quotas are keyed by client IP (`ip:`) — NAT/proxies coalesce addresses and botnets can fragment them; API-token clients get their own `token:<id>` quota (Phase 6). The anonymous drop endpoint is not rate limited yet. Uploads are also served on whatever interface the app binds; a public deployment must put the drop page behind TLS and (optionally) a rate limit.
 
 ## Phase 5: completed
@@ -291,10 +300,10 @@ Delivered:
 
 | Check | Result |
 |-------|--------|
-| `pytest` | __TOTAL__ passed (343 before Phase 7; +__NEW__ in `test_remote_sync_engine.py`, `test_remote_providers.py`, `test_remote_sync_api.py`, `test_worker.py`, `test_secrets.py`, plus additions to `test_migrations.py`, `test_dashboard.py`, `test_logging.py`) |
-| Coverage (`app/`) | __COV__ overall; __COVDETAIL__ |
+| `pytest` | 458 passed (343 before Phase 7; +115 in `test_remote_sync_engine.py`, `test_remote_providers.py`, `test_remote_sync_api.py`, `test_worker.py`, `test_secrets.py`, plus additions to `test_migrations.py`, `test_dashboard.py`, `test_logging.py`) |
+| Coverage (`app/`) | 89 % overall; `sync_engine` 91 %, `remote_sync` 92 %, `secrets` 92 %, providers 74–84 % (Google Drive lowest), worker loop 91 % (re-measured after the fact by running the suite at commit `3a217dd` in a separate worktree) |
 | `ruff check` / `ruff format --check` | clean |
-| `mypy` (strict, `app` + `tests`) | no issues in __MYPY__ source files |
+| `mypy` (strict, `app` + `tests`) | no issues in 146 source files |
 | `alembic upgrade head` on a fresh directory | applies `0001`–`0007`; drift test clean; `downgrade 0006` drops the five tables and the `remotes:*` grants; re-upgrade works |
 | Dependency pins | `pip install --dry-run --ignore-installed --no-deps -r requirements-dev.txt` resolves; `pip check` reports no broken requirements; all new modules import with warnings as errors |
 | Engine | every planner rule (direction × change × conflict × deletion), deletion guard, conflict names, exclude matching, scan skipping symlinks/temp/archive; full runs against a local-directory provider: push/pull/two-way, one-way never overwrites a changed destination, all three conflict policies in every direction, identical-file adoption (byte compare and MD5), ignore vs archive deletions (journaled), modified-vs-deleted restore, guard trip + override, dry run, excludes, hostile remote names, cancel, per-file failure retried next run, dead connection, missing local folder, new remote folder created / vanished remote folder refused |
@@ -312,3 +321,73 @@ Delivered:
 - The **worker unit was not run under real systemd**; in particular `MemoryDenyWriteExecute` with `cryptography`/`paramiko` and outbound network access from the sandbox are unverified.
 - Large trees and large files (performance, memory use of a full remote listing, multi-gigabyte transfers, S3 multipart uploads) were not tested.
 - Only one worker process was run; PostgreSQL is still unexercised.
+
+## Phase 8: completed
+
+Delivered:
+
+- **Libraries and access** (`app/services/media/libraries.py`, migration `0008`). Personal libraries (`<NAS_MEDIA_DIR>/<username>`, created on first use) are private to their owner; administrators (`media:admin`) register shared libraries over existing folders inside `NAS_FILE_ROOTS`, grant them to groups, enable/disable, rename, rescan and remove them (removal drops the index, album entries and cache, never files). One SQL clause decides what a caller may browse; anything else is a 404. New permissions `media:read`, `media:write` (admin, operator, viewer) and `media:admin` (admin).
+- **Index** (`indexer.py`, `images.py`). Scans walk without following symlinks, skip hidden entries and non-allowlisted types, hash new/changed files (SHA-256) and extract dimensions and EXIF (date taken, camera, orientation, GPS) with Pillow 13.0.0; decoding is refused above `NAS_MEDIA_MAX_IMAGE_PIXELS`. Guards keep a missing/unmounted folder, an interrupted walk or unreadable directories from dropping anything. Every change is journaled in `media_changes`.
+- **Thumbnails** (`thumbnails.py`). Upright 320/1280 px WebP in a fingerprint-keyed cache, rendered by the worker in batches or on demand; HEIC is indexed without a thumbnail.
+- **Uploads, phone backup and sync** (`uploads.py`, `changes.py`). `POST /media/upload` and a new resumable `media` target write into the caller's personal library (`YYYY/MM` by default, never overwriting, `taken_at` sets the folder and mtime); `POST /media/sync/lookup` (hash-first backup), `GET /media/sync/cursor` and `GET /media/sync/changes` (cursor/reset semantics of Phase 6). Owners can delete items (file + index).
+- **Search and albums** (`search.py`, `albums.py`). Filters for library, text (name/folder/camera, wildcards literal), kind, date range, camera, GPS, album; four sort orders; paging. Private per-user albums with covers, bulk add/remove and access re-checks.
+- **Worker** (`jobs.py`, `app/worker/runner.py`). Scheduled and on-demand scans with atomic claims and leases (re-queued when a worker dies or stops), thumbnail batches, hourly pruning of the media journal and orphaned cache files — on a single-thread media pool separate from sync.
+- **API and UI.** `/api/v1/media/...` (libraries, status, items, thumbnails, originals with Range and allowlisted types, upload, sync, albums), `/info` feature `media_gallery`; a **Gallery** page (filters, lazy thumbnail grid, lightbox with metadata, prev/next and keyboard navigation, download, albums, drag-and-drop upload, rescan; an admin *Libraries* card with shared-library creation and group grants). CSP-compatible, DOM via `textContent`.
+- **Config:** `NAS_MEDIA_DIR`, `NAS_MEDIA_CACHE_DIR`, `NAS_MEDIA_MAX_IMAGE_PIXELS`, `NAS_MEDIA_SCAN_INTERVAL_MINUTES`, `NAS_MEDIA_THUMBNAIL_BATCH`, `NAS_MEDIA_SEARCH_LIMIT`, `NAS_MEDIA_SCAN_LEASE_SECONDS` (both env templates).
+
+### Verification (executed in this workspace, Python 3.12.3, Ubuntu 24.04)
+
+| Check | Result |
+|-------|--------|
+| `pytest` | 515 passed (458 before Phase 8; +57 in `test_media_index.py`, `test_media_api.py`, `test_media_worker.py`, plus additions to `test_migrations.py`, `test_dashboard.py`, `test_api_tokens.py`) |
+| Coverage (`app/`) | 87 % as printed, which counts the Phase 9 `ffmpeg.py` that was created during the run (0 %); about 89 % without it. `media` router 100 %, `jobs` 100 %, other media services 91–98 % |
+| `ruff check` / `ruff format --check` / `mypy` (strict) | clean |
+| Migrations | fresh `upgrade head` applies `0001`–`0008`; drift test clean; `downgrade 0007` drops the six media tables and every `media:*` grant; re-upgrade works |
+| Index and thumbnails | real JPEG/PNG files generated with Pillow: EXIF date/camera/orientation/GPS, garbage EXIF, corrupt files, pixel-limit refusal (header check and Pillow's hard limit), upright WebP thumbnails, transparency kept; scans add/modify/delete with journal rows, skip hidden/temp/archive/symlinked files and directories, honour `include_videos`, refuse a missing folder, keep a large index when the folder is empty, keep items after a stopped scan or an unreadable directory; fingerprint-keyed regeneration and orphan pruning (in-progress temps spared) |
+| API and permissions | anonymous 401; viewer gets a personal library but no admin routes; a role without media permissions → 403 (and the Gallery page refused); token scopes enforced (bearer uploads need no CSRF); personal libraries private between users and from administrators (404 on item, thumbnail, original, album, library, scan, change feed, album add); shared libraries visible through group grants, read-only, hidden after revoke or disable, removal keeps files; validation (traversal, missing folder, unknown root/group, `~` names, duplicates, personal-library restrictions); upload folders, EXIF beating client dates, mtime from `taken_at`, collision suffixes, type/hidden/traversal/depth/size rejections without leftovers; resumable `media` target; Range 206, allowlisted type, `nosniff`, inline vs audited attachment; on-demand thumbnails; search filters (wildcards literal), sorting, paging; album lifecycle and audit trail; hash lookup and change feed |
+| Worker | due scan → claimed → indexed → thumbnails rendered on the next tick; interval 0 disables scheduling; next scan waits for the interval; exclusive claims; lease reclaim and renewal; stopped scan re-queued; failed and crashing scans recorded; media work does not occupy sync slots; journal pruning keeps the newest row |
+| Live run (`python -m app` + `python -m app.worker`, scratch data dir) | JPEG with EXIF (orientation 6, GPS) uploaded → `2023/12/xmas.jpg`, 900×1600, camera and GPS parsed; large thumbnail WebP 720×1280 (upright); original Range → 206; search and album; a second (viewer) account got 404 on the item, thumbnail, original and album and saw 0 items; a shared library over a file-root folder granted to a group was scanned by the worker and became visible to the member; token-authenticated hash lookup and change feed; worker online, thumbnails all rendered; `/gallery` 200; no ERROR/CRITICAL lines or tracebacks in either log |
+
+### Not verified
+
+- The Gallery page was not used in a real browser, and `gallery.js` was not syntax-checked (no Node runtime; running a downloaded JavaScript parser was not permitted in this session). A test checks that every element the script looks up exists in the rendered page.
+- No real phone backup client was used; the protocol was driven through TestClient, curl and the Postman collection.
+- Large libraries (tens of thousands of photos, multi-gigabyte videos) were not benchmarked; a scan hashes every new or changed file.
+- PostgreSQL still not exercised; the worker unit with the media pools was not run under real systemd.
+
+## Phase 9: completed
+
+Delivered:
+
+- **ffprobe/ffmpeg integration** (`app/services/media/ffmpeg.py`). The only module that runs the binaries: fixed argument lists without a shell, `file:` inputs/outputs, minimal environment, `stdin=/dev/null`, timeouts, `-progress pipe:1` parsing on a reader thread, kill on stop or timeout, temp-then-rename outputs. Binaries from `NAS_FFMPEG_PATH`/`NAS_FFPROBE_PATH` or `PATH`.
+- **Video metadata and playback modes** (`video.py`, migration `0009`). Duration, dimensions (rotation applied), codecs, container and bitrate from ffprobe; `playback` is `direct` (H.264 + AAC/MP3 in MP4/M4V/MOV; VP8/VP9/AV1 + Opus/Vorbis in WebM), `transcode`, `unsupported` (no video stream; cover art ignored) or `unknown` (no ffprobe — re-probed by the next scan once ffmpeg is installed). Video thumbnails come from a poster frame (10 % in, at most 1 s).
+- **Streaming.** `GET /media/items/{id}/stream` serves direct videos and ready transcodes with HTTP Range (seeking) and the right type, or answers 409 `transcode_required` with the transcode state.
+- **Cached transcodes** (`transcode.py`, table `media_transcodes`). On-demand (`POST /media/items/{id}/transcode`, anyone who can watch) or per library (`POST /media/libraries/{id}/transcode`, admin); libx264 + AAC, height cap, `+faststart`; fingerprint-keyed outputs (a changed source is never served a stale rendition), claims/leases/reclaim like scans, re-queue on worker shutdown, recorded and audited failures, LRU eviction above `NAS_MEDIA_TRANSCODE_CACHE_MAX_BYTES`, orphan pruning, cleanup when a video is deleted. 503 `transcoding_unavailable` without ffmpeg or with `NAS_MEDIA_TRANSCODE_ENABLED=false`.
+- **Worker.** A third single-thread pool for transcodes; the worker unit now runs at `Nice=10`, best-effort I/O priority 7.
+- **UI.** The gallery lightbox plays videos (`<video>` with poster), shows a *Prepare for playback* button with live progress for videos that need a transcode, and explains unplayable files; duration badges on video tiles; a **Videos** page (`/videos`, the gallery preset to videos); *Prepare videos* per library and transcode/cache status for administrators.
+- **API extras:** `GET /media/items/{id}/transcode`, transcode and ffmpeg fields in `/media/status`, `playback`/`rotation` on every item, `/info` features `video_streaming` and (when available) `video_transcoding`.
+- **Config:** `NAS_FFMPEG_PATH`, `NAS_FFPROBE_PATH`, `NAS_MEDIA_PROBE_TIMEOUT_SECONDS`, `NAS_MEDIA_TRANSCODE_ENABLED`, `_MAX_HEIGHT`, `_CRF`, `_PRESET`, `_THREADS`, `_TIMEOUT_SECONDS`, `_CACHE_MAX_BYTES`, `_LEASE_SECONDS`.
+- **Fixes found by the live tests:** ffprobe rejects `-nostdin` (the probe now omits it); the transcoder now closes ffmpeg's stdout pipe (a `ResourceWarning` the fake-process tests caught).
+- **Postman collection** `docs/postman/nas-manager-phase8-9.postman_collection.json` (29 requests: token, gallery, sync, albums, expected failures, video upload/transcode/stream, cleanup).
+
+### Verification (executed in this workspace, Python 3.12.3, Ubuntu 24.04, ffmpeg 6.1.1 from Ubuntu)
+
+| Check | Result |
+|-------|--------|
+| `pytest` | 563 passed (515 after Phase 8; +48 in `test_video.py`, `test_ffmpeg_live.py`, plus additions to `test_migrations.py` and `test_dashboard.py`) |
+| Coverage (`app/`) | 91 % overall; `ffmpeg` 96 %, `transcode` 98 %, `video` 100 %, `thumbnails` 96 %, `indexer` 94 %, `media` router 99 %, `worker/runner` 93 %. The live-ffmpeg tests ran (ffmpeg installed); without ffmpeg they are skipped |
+| `ruff check` / `ruff format --check` / `mypy` (strict, 169 source files) | clean |
+| Migrations | fresh `upgrade head` applies `0001`–`0009`; drift test clean; `downgrade 0008` drops `media_transcodes` and the two new columns; re-upgrade works |
+| Dependencies | `pip check` clean; every new module imports with warnings as errors |
+| Fake-ffmpeg tests | ffprobe JSON parsing (rotation from side data and tags, cover art, NaN/garbage numbers, malformed output); 12-case playback table; argument lists (`file:` absolute paths, a hostile `-i http:…` file name stays a file, preset/CRF/scale, no `-nostdin` for ffprobe); `_run` failure/timeout/missing binary; transcoder with a real child process: progress to 100 %, failure with stderr, empty output, kill on stop, kill on timeout; upload → probe → poster thumbnail → direct stream with Range (including a suffix range); rotated dimensions; poster failure; audio-only files; no ffmpeg → `unknown` then re-probed by a scan; 503 when disabled; full transcode lifecycle (409 → queued, idempotent → ready → stream + Range → stale after a source change → re-transcode, old file removed, audit events); failure + retry; stop → re-queue; lease reclaim; LRU eviction; deletion removes the transcode; orphan pruning; library pre-transcode; the worker runs transcodes on its own pool; other users get 404; `/videos` renders |
+| Real-ffmpeg tests (`test_ffmpeg_live.py`) | synthetic `testsrc` clips: probe and classify H.264/AAC MP4 (`direct`) and MPEG-4 Matroska (`transcode`); real poster JPEG; real transcode whose output probes as H.264 and classifies `direct`; corrupt input fails cleanly; end to end through the API (upload, poster thumbnail, Range stream, 409, transcode, stream, seek) |
+| Live run (app + worker + ffmpeg 6.1.1) | H.264/AAC MP4 → `direct`, 4.0 s, 640×360; Range 206 (first 100 bytes and the last 50); poster thumbnail WebP. MPEG-4/MP3 MKV → `transcode`; stream 409 `transcode_required`; request → worker transcoded it in about 1 s → `ready`, 100,487 bytes; streamed file probes as `h264 aac`; seek Range 206. `/media/status` reports ffmpeg and cache usage; `/info` lists `video_streaming` and `video_transcoding`; `/videos` 200; no ERROR/CRITICAL lines or tracebacks; the worker exited 0 on SIGTERM |
+| Postman collection | all 29 requests replayed against a live app + worker (scratch data dir, real ffmpeg) with a stdlib runner that interprets the collection's own status checks and variable captures: all passed, twice in a row; no errors in the logs |
+| systemd | `systemd-analyze verify` on both edited units reports only the missing `/opt/nas-manager/.venv` paths (expected here) and the world-writable/executable mode of `nas-manager.service` in this working tree (pre-existing file modes, not introduced by this phase) |
+
+### Not verified
+
+- **No real browser**: video playback, seeking in `<video>`, the *Prepare for playback* progress and the poster were checked through HTTP only. Browser codec support differs (e.g. some browsers play HEVC); the classification is deliberately conservative.
+- ffprobe/ffmpeg **under the systemd sandboxes** (`MemoryDenyWriteExecute`, `SystemCallFilter`, `Nice=`) were not run on a real host.
+- Long and large videos (hours, 4K, multi-gigabyte) were not transcoded; only synthetic few-second clips. Transcode timing and cache sizing on real hardware are unmeasured.
+- Only ffmpeg 6.1.1 was exercised.

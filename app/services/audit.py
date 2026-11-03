@@ -29,6 +29,7 @@ CATEGORY_RAID = "raid"
 CATEGORY_API_TOKEN = "api_token"  # noqa: S105
 CATEGORY_UPLOAD = "upload"
 CATEGORY_REMOTE_SYNC = "remote_sync"
+CATEGORY_MEDIA = "media"
 
 OUTCOME_SUCCESS = "success"
 OUTCOME_FAILURE = "failure"
@@ -130,6 +131,23 @@ SYNC_CONFLICT = "sync.conflict"
 SYNC_CONFLICT_ACKNOWLEDGED = "sync.conflict_acknowledged"
 SYNC_ARCHIVED = "sync.archived"
 SYNC_DELETION_GUARD_TRIPPED = "sync.deletion_guard_tripped"
+
+# Photo gallery and media libraries (Phase 8)
+MEDIA_LIBRARY_CREATED = "media.library_created"
+MEDIA_LIBRARY_UPDATED = "media.library_updated"
+MEDIA_LIBRARY_DELETED = "media.library_deleted"
+MEDIA_LIBRARY_GROUPS_CHANGED = "media.library_groups_changed"
+MEDIA_SCAN_QUEUED = "media.scan_queued"
+MEDIA_ITEM_UPLOADED = "media.item_uploaded"
+MEDIA_ITEM_DOWNLOADED = "media.item_downloaded"
+MEDIA_ITEM_DELETED = "media.item_deleted"
+MEDIA_ALBUM_CREATED = "media.album_created"
+MEDIA_ALBUM_UPDATED = "media.album_updated"
+MEDIA_ALBUM_DELETED = "media.album_deleted"
+MEDIA_ALBUM_ITEMS_CHANGED = "media.album_items_changed"
+# Video streaming (Phase 9)
+MEDIA_TRANSCODE_REQUESTED = "media.transcode_requested"
+MEDIA_TRANSCODE_FAILED = "media.transcode_failed"
 
 
 class RequestContext(TypedDict):

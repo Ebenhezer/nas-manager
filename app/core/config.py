@@ -179,6 +179,45 @@ class Settings(BaseSettings):
     # Maximum number of planned actions stored with a run (dry-run preview).
     remote_sync_preview_limit: int = Field(default=1000, ge=10, le=100_000)
 
+    # ------------------------------------------------------------------
+    # Photo gallery and personal media libraries (Phase 8). Every user's
+    # personal library is <NAS_MEDIA_DIR>/<username>; administrators may
+    # also register shared libraries over folders inside NAS_FILE_ROOTS.
+    # NAS_MEDIA_CACHE_DIR holds generated thumbnails, posters and (Phase 9)
+    # transcodes; it is disposable and rebuilt on demand. Images larger than
+    # NAS_MEDIA_MAX_IMAGE_PIXELS are indexed but never decoded.
+    # ------------------------------------------------------------------
+    media_dir: Path | None = None
+    media_cache_dir: Path | None = None
+    media_max_image_pixels: int = Field(default=100_000_000, ge=1_000_000, le=2_000_000_000)
+    media_scan_interval_minutes: int = Field(default=60, ge=0, le=7 * 24 * 60)
+    media_thumbnail_batch: int = Field(default=50, ge=1, le=10_000)
+    media_search_limit: int = Field(default=500, ge=10, le=10_000)
+    media_scan_lease_seconds: int = Field(default=600, ge=30, le=86400)
+
+    # ------------------------------------------------------------------
+    # Video playback and streaming (Phase 9). ffprobe extracts metadata and
+    # ffmpeg renders poster frames and, optionally, browser-compatible MP4
+    # transcodes (H.264/AAC) of videos a browser cannot play directly. When
+    # the binaries are missing, videos are still indexed and downloadable;
+    # only metadata, posters and transcoding are unavailable. Transcodes are
+    # cached in NAS_MEDIA_CACHE_DIR/transcodes and evicted least recently
+    # used above NAS_MEDIA_TRANSCODE_CACHE_MAX_BYTES.
+    # ------------------------------------------------------------------
+    ffmpeg_path: Path | None = None
+    ffprobe_path: Path | None = None
+    media_probe_timeout_seconds: int = Field(default=30, ge=1, le=600)
+    media_transcode_enabled: bool = True
+    media_transcode_max_height: int = Field(default=1080, ge=144, le=4320)
+    media_transcode_crf: int = Field(default=23, ge=0, le=51)
+    media_transcode_preset: Literal[
+        "ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow"
+    ] = "veryfast"
+    media_transcode_threads: int = Field(default=2, ge=0, le=64)
+    media_transcode_timeout_seconds: int = Field(default=6 * 3600, ge=60, le=7 * 86400)
+    media_transcode_cache_max_bytes: int = Field(default=20 * _GIB, ge=0)
+    media_transcode_lease_seconds: int = Field(default=600, ge=30, le=86400)
+
     @field_validator(
         "data_dir",
         "log_dir",
@@ -187,6 +226,10 @@ class Settings(BaseSettings):
         "public_upload_dir",
         "helper_socket",
         "credentials_key_file",
+        "media_dir",
+        "media_cache_dir",
+        "ffmpeg_path",
+        "ffprobe_path",
     )
     @classmethod
     def _absolute(cls, value: Path | None) -> Path | None:
@@ -274,6 +317,18 @@ class Settings(BaseSettings):
         return self.data_dir / "secrets" / "credentials.key"
 
     @property
+    def resolved_media_dir(self) -> Path:
+        """Parent directory of every user's personal media library."""
+        return self.media_dir if self.media_dir is not None else self.data_dir / "media"
+
+    @property
+    def resolved_media_cache_dir(self) -> Path:
+        """Generated thumbnails, posters and transcodes (disposable)."""
+        if self.media_cache_dir is not None:
+            return self.media_cache_dir
+        return self.data_dir / "media-cache"
+
+    @property
     def resolved_helper_socket(self) -> Path:
         """Unix socket the privileged helper listens on."""
         if self.helper_socket is not None:
@@ -306,6 +361,8 @@ class Settings(BaseSettings):
             (self.data_dir / "files").mkdir(parents=True, exist_ok=True, mode=0o750)
         self.resolved_public_upload_dir.mkdir(parents=True, exist_ok=True, mode=0o750)
         self.resolved_credentials_key_file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.resolved_media_dir.mkdir(parents=True, exist_ok=True, mode=0o750)
+        self.resolved_media_cache_dir.mkdir(parents=True, exist_ok=True, mode=0o750)
 
 
 @lru_cache

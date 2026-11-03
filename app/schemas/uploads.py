@@ -8,14 +8,18 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.schemas.files import FileEntry
+from app.schemas.media import MediaItemOut
 from app.schemas.public_uploads import PublicUploadResult
 
 
 class UploadCreate(BaseModel):
     """Declare an upload. ``root``/``path``/``overwrite`` apply to the
-    ``files`` target only; the ``public`` target is the drop folder."""
+    ``files`` target; the ``public`` target is the drop folder; the
+    ``media`` target is the caller's personal media library, where ``path``
+    is an optional folder (default ``YYYY/MM``) and names are never
+    overwritten."""
 
-    target: Literal["files", "public"]
+    target: Literal["files", "public", "media"]
     filename: str = Field(min_length=1, max_length=255)
     size: int = Field(ge=0)
     root: str | None = None
@@ -40,11 +44,12 @@ class UploadComplete(BaseModel):
 
 
 class UploadCompleted(BaseModel):
-    """Exactly one of ``file`` (files target) or ``public`` is set."""
+    """Exactly one of ``file`` (files target), ``public`` or ``media`` is set."""
 
     target: str
     file: FileEntry | None = None
     public: PublicUploadResult | None = None
+    media: MediaItemOut | None = None
 
 
 class UploadCleanupResult(BaseModel):

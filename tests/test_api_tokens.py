@@ -157,7 +157,11 @@ def test_cannot_grant_scopes_beyond_own_permissions(app: FastAPI, admin_user: Us
     with TestClient(app) as client:
         login(client, "viewer1", ADMIN_PASSWORD)
         headers = {"X-CSRF-Token": client.cookies["nas_csrf"]}
-        assert client.get("/api/v1/tokens/scopes").json()["scopes"] == ["dashboard:read"]
+        assert client.get("/api/v1/tokens/scopes").json()["scopes"] == [
+            "dashboard:read",
+            "media:read",
+            "media:write",
+        ]
         response = client.post(
             "/api/v1/tokens", json={"name": "x", "scopes": ["users:write"]}, headers=headers
         )

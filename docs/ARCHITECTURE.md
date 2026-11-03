@@ -32,7 +32,7 @@ Rules: routes validate and delegate; services hold logic and talk to the OS or d
 | `app/main.py` | Application factory: logging, directories, database, middleware, routers, startup checks |
 | `app/__main__.py` | `python -m app` entry point (uvicorn, application-controlled logging) |
 | `app/cli.py` | `python -m app.cli bootstrap-admin` (first-run administrator) |
-| `app/worker/` | `python -m app.worker`: the sync worker loop (`runner.py`: heartbeat, lease renewal/reclaim, scheduling, atomic claiming, thread pool, run-history pruning) |
+| `app/worker/` | `python -m app.worker`: the worker loop (`runner.py`: heartbeat, lease renewal/reclaim, scheduling, atomic claiming, run-history pruning; a sync pool, a single-thread media pool for scans and thumbnails, and a single-thread transcode pool) |
 | `app/core/config.py` | `Settings` from `NAS_*` variables (incl. sessions, throttling, Argon2id costs) |
 | `app/core/logging.py` | JSON/text formatters, redaction, rotating file handler |
 | `app/core/middleware.py` | Request id, access log (path only, never query string), security headers |
@@ -42,14 +42,15 @@ Rules: routes validate and delegate; services hold logic and talk to the OS or d
 | `app/core/secrets.py` | Fernet key file (`NAS_CREDENTIALS_KEY_FILE`, created 0600) and `CredentialCipher` for remote credentials at rest |
 | `app/db/` | Naming conventions, engine/session factory, migration helpers, `get_db` |
 | `app/api/v1/deps.py` | `CurrentUser` (session or API token), `get_current_user`, `require_permission(...)`, `require_session_auth` |
-| `app/api/v1/` | `auth`, `users`, `groups`, `roles`, `audit`, `health`, `system`, `files`, `samba`, `settings`, `public_uploads`, `disks`, `api_tokens`, `uploads` (resumable), `sync` (+ `/info`), `remotes`, `remote_sync` (jobs, runs, conflicts, status) |
+| `app/api/v1/` | `auth`, `users`, `groups`, `roles`, `audit`, `health`, `system`, `files`, `samba`, `settings`, `public_uploads`, `disks`, `api_tokens`, `uploads` (resumable), `sync` (+ `/info`), `remotes`, `remote_sync` (jobs, runs, conflicts, status), `media` (libraries, items, thumbnails, streaming, transcodes, albums, mobile sync) |
 | `app/services/` | `passwords`, `auth_service`, `users_service`, `groups_service`, `roles_service`, `security`, `audit`, `throttle`, `bootstrap_service`, `health`, `monitoring`, `settings_service`, `files`, `samba`, `public_uploads`, `api_tokens`, `resumable_uploads`, `sync`, `remotes`, `remote_sync`, `sync_engine` |
+| `app/services/media/` | Photo gallery and video (Phases 8–9): `libraries` (records, access rules, path jail), `images` (Pillow EXIF + thumbnails), `indexer` (scans), `thumbnails` (cache), `changes` (mobile journal + hash lookup), `search`, `albums`, `uploads`, `jobs` (worker side), `ffmpeg` (the only module that runs ffprobe/ffmpeg), `video` (playback classification), `transcode` (cached MP4 renditions) |
 | `app/services/remote/` | Remote store providers behind one interface (`base.py`): `sftp` (paramiko, pinned host key), `ftp` (FTP/FTPS, `ftplib`), `webdav` and `gdrive` (httpx2), `s3` (boto3); `registry.py` holds the field specs, validation and factory |
 | `app/services/helper_client.py` | Thin `AF_UNIX` client for the privileged helper; maps helper errors to typed `AppError`s (503 unavailable, 400 validation/intent/operation) |
 | `app/services/disks.py` | Disk/volume/RAID discovery parsing (`lsblk`, `findmnt`, `/proc/mdstat`, `smartctl`), preview + confirmed actions, audit |
 | `app/helper/` | Privileged helper (root process): `operations.py` fixed allowlist, `server.py` Unix socket + `SO_PEERCRED`, `protocol.py` framing/intent digest, `__main__.py` entry |
-| `app/models/` | `user`, `group`, `role`, `session`, `audit_event`, `app_setting`, `samba_share`, `public_upload`, `api_token`, `upload_session`, `file_change`, `remote` (connections, sync jobs, baselines, runs, conflicts) |
-| `app/web/` | Jinja2 templates + modular JS (login, dashboard, users, groups, audit, profile + API tokens, files, samba, settings, uploads, public_upload, disks, api_tokens admin, remote_sync) |
+| `app/models/` | `user`, `group`, `role`, `session`, `audit_event`, `app_setting`, `samba_share`, `public_upload`, `api_token`, `upload_session`, `file_change`, `remote` (connections, sync jobs, baselines, runs, conflicts), `media` (libraries, group grants, items, albums, change journal, transcodes) |
+| `app/web/` | Jinja2 templates + modular JS (login, dashboard, users, groups, audit, profile + API tokens, files, samba, settings, uploads, public_upload, disks, api_tokens admin, remote_sync, gallery — also served as `/videos`) |
 
 ## Authentication and authorization
 
@@ -72,9 +73,10 @@ Every response carries `X-Request-ID`. A client-supplied id is honoured only if 
 ```
 systemd: nas-manager.service        (user nas-manager, no capabilities, sandboxed)
    └── uvicorn → FastAPI app → SQLite in /var/lib/nas-manager
-systemd: nas-manager-worker.service (user nas-manager, same sandbox)
-   └── python -m app.worker → claims sync runs from the same database,
-       talks to remote stores, writes inside the managed file roots
+systemd: nas-manager-worker.service (user nas-manager, same sandbox, Nice=10)
+   └── python -m app.worker → claims sync runs, media scans and transcodes
+       from the same database, talks to remote stores, writes inside the
+       managed file roots and the media cache, runs ffprobe/ffmpeg
 systemd: nas-manager-helper.service (root, allowlisted operations only)
    └── Unix socket at /run/nas-manager/helper.sock (0660 root:<group>,
        SO_PEERCRED uid allowlist) ← the helper_client talks to this
@@ -106,6 +108,23 @@ The web process never executes arbitrary commands and never runs as root. The he
 - **Credentials.** Non-secret settings live in `remote_connections.config`; secrets are one Fernet token per connection (`app/core/secrets.py`). Google Drive uses OAuth 2.0 authorization code + PKCE; the state is single-use, bound to the user who started it and expires after 10 minutes.
 - Migration `0007` adds `remote_connections`, `sync_jobs`, `sync_job_entries`, `sync_runs`, `sync_conflicts` and the `remotes:read`/`remotes:write` permissions (admin both, operator read).
 
+## Photo gallery and media libraries (Phase 8)
+
+- **Libraries.** A `media_libraries` row is either *personal* (one per user, folder `<NAS_MEDIA_DIR>/<username>`, created the first time the user opens the gallery or uploads) or *shared* (registered by an administrator over an existing folder inside a managed file root and granted to groups through `media_library_groups`). Paths are recomputed and re-validated through `files.resolve_root`/`resolve_in_root` on every use, so a root removed from configuration or a folder swapped for an outside symlink is refused, never followed.
+- **Access rules** (`app/services/media/libraries.py::browsable_clause`). A user browses their own personal library and the shared libraries granted to one of their groups; `media:admin` additionally browses every shared library and sees every library's *record* (counts, scan state) but not the photos in other users' personal libraries. Disabled libraries are hidden. Only the owner (with `media:write`) uploads to or deletes from a personal library; shared libraries are read-only through the gallery. Every item, thumbnail, stream and album lookup is filtered by the same clause, so anything else is a 404.
+- **Index.** `app/services/media/indexer.py` walks a library without following symlinks, skips hidden entries (which includes the application's `.nas-*` temp files and `.nas-sync-archive/`) and anything outside the image/video extension allowlists, and only re-reads files whose size or mtime changed. New and changed files get a SHA-256, Pillow metadata (dimensions, EXIF date, camera, orientation, GPS) and, for videos, ffprobe metadata (Phase 9); vanished files lose their row. Guards: a missing library folder fails the scan; a walk that was stopped, hit an unreadable directory or found nothing where ≥ 10 items were indexed (an unmounted disk) removes nothing. Every change appends a `media_changes` row (the mobile cursor).
+- **Thumbnails.** `app/services/media/thumbnails.py` renders upright (EXIF-orientation-aware) 320 px and 1280 px WebP files into `<NAS_MEDIA_CACHE_DIR>/thumbs/<id % 256>/<id>-<fingerprint>-<size>.webp`, where the fingerprint hashes the source's size and mtime; a stale thumbnail therefore can never be served. Images above `NAS_MEDIA_MAX_IMAGE_PIXELS` are never decoded (Pillow's decompression-bomb check is promoted to an error). The worker renders pending thumbnails in batches; the thumbnail endpoint renders a missing one on demand.
+- **Uploads and mobile sync.** `app/services/media/uploads.py` writes into the caller's personal library (`YYYY/MM` folders by default) through a temp file and a hard link (falling back to rename), so a name is never overwritten even by concurrent uploads; the resumable upload protocol gained a `media` target that ends in the same commit helper. `POST /media/sync/lookup` tells a phone which SHA-256 digests the server already has; `GET /media/sync/changes` pages the journal per library with the same cursor/reset semantics as the Phase 6 file journal.
+- **Worker.** Scans use the sync-run pattern: a conditional `UPDATE … WHERE scan_state='queued'` claims a library, the worker renews the lease every tick, and an expired lease re-queues the scan (scans are idempotent). Libraries are rescanned every `NAS_MEDIA_SCAN_INTERVAL_MINUTES`; scans, thumbnails and transcodes run on their own single-thread pools so they never take a sync slot. Hourly pruning trims the media journal and orphaned cache files.
+- Migration `0008` adds `media_libraries`, `media_library_groups`, `media_items`, `media_albums`, `media_album_items`, `media_changes` and the `media:read`/`media:write`/`media:admin` permissions (admin all three; operator and viewer read + write).
+
+## Video playback and streaming (Phase 9)
+
+- **ffmpeg isolation.** `app/services/media/ffmpeg.py` is the only code that runs ffprobe/ffmpeg: fixed argument lists, no shell, inputs and outputs passed as `file:<absolute path>` (so a file name can never become an option or another protocol), a minimal environment, `stdin=/dev/null`, timeouts, and a kill on worker shutdown. Binaries come from `NAS_FFMPEG_PATH`/`NAS_FFPROBE_PATH` or a `PATH` lookup; without them videos are still indexed (`playback: unknown`) and downloadable, and the next scan after ffmpeg appears probes them.
+- **Playback modes** (`app/services/media/video.py`). H.264 with AAC/MP3 (or no audio) in MP4/M4V/MOV, and VP8/VP9/AV1 with Opus/Vorbis (or no audio) in WebM, are `direct`: `GET /media/items/{id}/stream` serves the original with HTTP Range, so the browser's `<video>` element seeks without any server-side work. Any other video stream is `transcode`; a file without a video stream (cover art does not count) is `unsupported`.
+- **Transcodes** (`app/services/media/transcode.py`, table `media_transcodes`). A transcode is requested on demand (anyone who can watch the video) or for a whole library (`media:admin`) and executed by the worker: libx264 (`NAS_MEDIA_TRANSCODE_PRESET`, `_CRF`), height capped at `NAS_MEDIA_TRANSCODE_MAX_HEIGHT`, AAC 128k stereo, `+faststart`, progress parsed from `-progress pipe:1`. Output goes to a temp file and is renamed to `<NAS_MEDIA_CACHE_DIR>/transcodes/<id % 256>/<id>-<fingerprint>.mp4`; a source change makes the rendition stale (never served) and a new request re-transcodes. Claims, lease renewal and reclaim mirror scans; a transcode interrupted by shutdown is re-queued, a failed one records the ffmpeg error and can be retried. The cache is evicted least recently streamed first above `NAS_MEDIA_TRANSCODE_CACHE_MAX_BYTES`. No HLS/adaptive streaming: one progressive MP4 per video.
+- Migration `0009` adds `media_items.playback`/`rotation` and `media_transcodes`; no new permissions.
+
 ## Planned additions
 
-Gallery (8), streaming (9), alerting (10), backups (11), config export/import (12), audit/syslog (13).
+Alerting (10), backups (11), config export/import (12), audit/syslog (13).

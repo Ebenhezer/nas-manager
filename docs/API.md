@@ -266,12 +266,12 @@ Public drop-folder uploads made with a bearer token are charged to that token's 
 
 ## Resumable uploads
 
-Chunked uploads that survive dropped connections. Works with sessions and tokens. Target `files` (a managed directory; needs `files:write` at every step) or `public` (the drop folder; charged to `token:<id>` or `user:<name>`).
+Chunked uploads that survive dropped connections. Works with sessions and tokens. Target `files` (a managed directory; needs `files:write` at every step), `public` (the drop folder; charged to `token:<id>` or `user:<name>`) or `media` (Phase 8: the caller's personal media library; needs `media:write` at every step; `path` is an optional folder, default `YYYY/MM`; names are never overwritten, a collision becomes `name (1).ext`).
 
 1. `POST /uploads` — body `{"target": "files", "root": "/srv/files", "path": "photos", "filename": "IMG_1.jpg", "size": 7340032, "overwrite": false, "sha256": "<optional hex>"}` or `{"target": "public", "filename": "IMG_1.jpg", "size": 7340032}` → 201 `{"id", "target", "filename", "offset": 0, "total_bytes", "chunk_max_bytes", "created_at", "expires_at"}` with `Location` and `Upload-Offset`. The destination, name, size caps, overwrite rule and (for `public`) remaining quota are checked here. At most `NAS_RESUMABLE_MAX_OPEN_PER_USER` open uploads (409).
 2. `PATCH /uploads/{id}` — headers `Upload-Offset: <n>` (must equal the server's offset, else 409 with `details.offset`) and `Content-Type: application/offset+octet-stream`; body = the next raw bytes, at most `chunk_max_bytes` and never past `size` (400, the chunk is rolled back). Returns the status with the new `Upload-Offset`. If the connection drops mid-chunk the bytes that arrived are kept.
 3. `HEAD /uploads/{id}` / `GET /uploads/{id}` — `Upload-Offset` and `Upload-Length` headers (plus JSON for GET): where to resume.
-4. `POST /uploads/{id}/complete` — optional body `{"sha256": "..."}` → `{"target": "files", "file": FileEntry}` or `{"target": "public", "public": PublicUploadResult}`. Incomplete → 409; checksum mismatch → 400 and the upload is discarded; a name that appeared meanwhile (without `overwrite`) → 409 and the bytes are kept; public quota exhausted → 413 and the upload is discarded (the authoritative quota check happens here, under the same row lock as single-shot uploads).
+4. `POST /uploads/{id}/complete` — optional body `{"sha256": "..."}` → `{"target": "files", "file": FileEntry}`, `{"target": "public", "public": PublicUploadResult}` or `{"target": "media", "media": MediaItem}`. Incomplete → 409; checksum mismatch → 400 and the upload is discarded; a name that appeared meanwhile (without `overwrite`) → 409 and the bytes are kept; public quota exhausted → 413 and the upload is discarded (the authoritative quota check happens here, under the same row lock as single-shot uploads).
 5. `DELETE /uploads/{id}` → 204, discards the bytes.
 
 Upload ids are private to their owner (others get 404). Each `PATCH` slides the expiry (`NAS_RESUMABLE_UPLOAD_TTL_HOURS`); expired uploads are discarded opportunistically and by `POST /uploads/cleanup` (`files:write`, returns `{"expired_uploads", "pruned_changes"}`). Staging files are named `.nas-resumable-<id>.part`, hidden from listings and search, and not touched by the drop-folder cleanup. Audited: `upload.session_created`, `upload.session_completed`, `upload.session_aborted`, `upload.session_expired` (plus the usual `file.uploaded` / `public_upload.uploaded`).
@@ -293,7 +293,7 @@ Every change the file manager makes (upload, overwrite, mkdir, rename, delete �
 
 ## Client discovery and downloads
 
-- `GET /info` (public) → `{"name", "version", "api_version": "1", "features": ["api_tokens", "resumable_uploads", "sync_cursors", "range_downloads", "remote_sync"], "auth_schemes": ["session", "bearer"], "limits": {"max_upload_bytes", "resumable_chunk_max_bytes", "resumable_upload_ttl_hours", "sync_change_retention_days"}}`. Nothing sensitive (no paths, no counts).
+- `GET /info` (public) → `{"name", "version", "api_version": "1", "features": ["api_tokens", "resumable_uploads", "sync_cursors", "range_downloads", "remote_sync", "media_gallery", "video_streaming", "video_transcoding"], "auth_schemes": ["session", "bearer"], "limits": {"max_upload_bytes", "resumable_chunk_max_bytes", "resumable_upload_ttl_hours", "sync_change_retention_days"}}`. Nothing sensitive (no paths, no counts).
 - `GET /files/content` honours `Range: bytes=a-b` (206 + `Content-Range`), so media can be streamed and interrupted downloads resumed.
 
 A Postman collection that walks through all of Phase 6 (token, resumable upload, sync, expected failures, cleanup) is in [`docs/postman/nas-manager-phase6.postman_collection.json`](postman/nas-manager-phase6.postman_collection.json). Set its `password` variable and run the folders in order.
@@ -373,6 +373,56 @@ Audited under category `remote_sync`: `remote.created/updated/deleted/tested/oau
 
 A Postman collection for Phase 7 is in [`docs/postman/nas-manager-phase7.postman_collection.json`](postman/nas-manager-phase7.postman_collection.json).
 
+## Photo gallery and media libraries (Phase 8)
+
+Permissions: `media:read` (browse), `media:write` (upload to and delete from your own library, manage your albums), `media:admin` (shared libraries, status). All three system roles have `media:read` + `media:write`; only `admin` has `media:admin`. API tokens need the matching scopes. Items, thumbnails, streams and albums the caller may not browse answer **404** (never 403).
+
+**Libraries**
+
+- `GET /media/libraries` (`media:read`) → `[LibraryOut]`. Creates the caller's personal library on first use (with `media:write`). Administrators also get every other library's record (`browsable: false` for other users' personal libraries). `LibraryOut`: `{"id", "name", "kind": "personal"|"shared", "owner_user_id", "is_own", "browsable", "writable", "root", "path", "enabled", "include_videos", "group_ids", "scan_state": "idle"|"queued"|"running", "last_scan_at", "last_scan_status", "last_scan_error", "last_scan_summary": {"added", "updated", "removed", "unchanged", "failed", "complete"}, "next_scan_at", "counts": {"image", "video", "pending_thumbnails"}, "created_at"}`. Personal libraries are named `~<username>`.
+- `GET /media/libraries/{id}` (`media:read`; administrators may read any record).
+- `POST /media/libraries` (`media:admin`) — `{"name", "root": "<a configured file root>", "path": "Photos/Family", "include_videos": true, "enabled": true, "group_ids": [3]}` → 201, queued for its first scan. Errors: unknown root 404; traversal, missing folder, unknown group, a name starting with `~` → 400; duplicate name (case-insensitive) → 409.
+- `PATCH /media/libraries/{id}` (`media:admin`) — `{"name"?, "enabled"?, "include_videos"?}`; personal libraries cannot be renamed (400).
+- `PUT /media/libraries/{id}/groups` (`media:admin`) — `{"group_ids": [...]}` replaces the read grants (shared libraries only).
+- `DELETE /media/libraries/{id}` (`media:admin`) → 204. Drops the index, album entries and cache for a shared library; **files are never touched**. Personal libraries → 409.
+- `POST /media/libraries/{id}/scan` (owner or `media:admin`) → 202, queues a rescan for the worker.
+- `GET /media/status` (`media:admin`) → `{"libraries", "items", "queued_scans", "running_scans", "pending_thumbnails", "worker_online", "worker_heartbeat_at", "pillow_version", "media_dir", "cache_dir", "cache_bytes", "ffmpeg_available", "ffmpeg_version", "transcoding_available", "queued_transcodes", "running_transcodes", "transcode_cache_bytes", "transcode_cache_max_bytes"}`.
+
+**Items**
+
+- `GET /media/items` (`media:read`) — query `library_id`, `q` (file name, folder, camera; case-insensitive, wildcards literal), `kind=image|video`, `date_from`, `date_to` (ISO datetimes against `taken_at`), `camera`, `album_id` (one of your albums), `has_gps`, `sort=taken_desc|taken_asc|name|size_desc`, `limit` (≤ `NAS_MEDIA_SEARCH_LIMIT`), `offset` → `{"items": [MediaItem], "total", "limit", "offset"}`.
+- `MediaItem`: `{"id", "library_id", "rel_path", "name", "kind", "mime", "size", "sha256", "width", "height", "taken_at", "camera_make", "camera_model", "orientation", "gps_lat", "gps_lon", "duration_seconds", "video_codec", "audio_codec", "container", "bitrate", "rotation", "playback", "thumb_state": "pending"|"ready"|"failed"|"unsupported", "thumb_error", "indexed_at"}`. `taken_at` is EXIF `DateTimeOriginal` (camera wall clock, no zone) or the file's mtime (UTC). `width`/`height` are the displayed size (EXIF/video rotation applied).
+- `GET /media/items/{id}` → `MediaItem`.
+- `GET /media/items/{id}/thumbnail?size=small|large` → `image/webp` (320/1280 px, upright), `Cache-Control: private, max-age=86400`. Rendered on demand if the worker has not yet; 404 when none can be made (`details.thumb_state`).
+- `GET /media/items/{id}/original[?download=true]` → the file with its allowlisted type (never sniffed; SVG and HTML are not media types here), `Range` supported, `Content-Disposition: inline` (or `attachment` with `download=true`, which is audited as `media.item_downloaded`).
+- `DELETE /media/items/{id}` (`media:write`, owner of the personal library) → 204: deletes the file and its index row. Shared-library items → 403.
+- `POST /media/upload` (`media:write`) — multipart `file`, optional `path` (folder inside your library, ≤ 8 levels, no hidden parts) and `taken_at` (ISO; picks the default `YYYY/MM` folder and sets the file's mtime) → 201 `MediaItem`. Only allowlisted photo/video extensions (400 otherwise); size capped by `NAS_MAX_UPLOAD_BYTES`; never overwrites.
+
+**Mobile synchronization**
+
+- `POST /media/sync/lookup` (`media:read`) — `{"sha256": ["<hex>", …]}` (≤ 1000) → `{"library_id", "present": {"<sha256>": [item ids]}, "missing": [...]}` for the caller's personal library. Upload only what is missing.
+- `GET /media/sync/cursor` → `{"cursor": "m<id>"}`; take it **before** listing a library with `/media/items`.
+- `GET /media/sync/changes?library_id=&cursor=&limit=` → `{"library_id", "cursor", "has_more", "reset", "changes": [{"id", "item_id", "rel_path", "kind": "created"|"modified"|"deleted", "sha256", "size", "created_at"}]}`. Same semantics as `/sync/changes`: keep calling while `has_more`; `reset: true` means re-list. Changes made outside the application (Samba, the file manager, a shell) appear after the next scan.
+
+**Albums** (private to their owner; `media:read` to read, `media:write` to change)
+
+- `GET /media/albums` → `[{"id", "name", "description", "cover_item_id", "item_count", "created_at", "updated_at"}]` (counts include only items you can still browse).
+- `POST /media/albums` — `{"name", "description"?}` → 201 album with `item_ids`. Duplicate name (case-insensitive) → 409.
+- `GET /media/albums/{id}`, `PATCH /media/albums/{id}` (`{"name"?, "description"?, "cover_item_id"?, "clear_cover"?}`; the cover must be in the album), `DELETE /media/albums/{id}` (the photos stay).
+- `POST /media/albums/{id}/items` / `DELETE /media/albums/{id}/items` — `{"item_ids": [...]}` (≤ 1000) → `{"changed": n}`. Adding an item you cannot browse → 404.
+
+Audited under category `media`: `media.library_created/updated/deleted/groups_changed`, `media.scan_queued`, `media.item_uploaded/downloaded/deleted`, `media.album_created/updated/deleted/items_changed`.
+
+## Video playback and streaming (Phase 9)
+
+- `GET /media/items/{id}/stream` (`media:read`) → the video with `Range` support (`206` + `Content-Range`, `Accept-Ranges: bytes`), so `<video>` players can seek. Directly playable files (`playback: "direct"`: H.264 + AAC/MP3 in MP4/M4V/MOV, VP8/VP9/AV1 + Opus/Vorbis in WebM) are served as they are (`video/mp4` / `video/webm`); `playback: "transcode"` videos are served from their cached MP4 once it is ready. Otherwise **409 `transcode_required`** with `details: {"item_id", "playback", "state": null|"queued"|"running"|"failed", "progress_percent", "transcoding_available"}`. Images → 400.
+- `GET /media/items/{id}/transcode` (`media:read`) → `{"item_id", "state": null|"queued"|"running"|"ready"|"failed", "progress_percent", "error", "output_size", "playback", "transcoding_available", "created_at", "finished_at"}`. `state` is `null` when nothing was requested for the file's *current* content.
+- `POST /media/items/{id}/transcode` (`media:read` + access to the item) → 202 with the same shape. Idempotent while queued/running/ready; re-queues after a failure or a source change. `playback: "direct"` → 409; no video stream or not yet probed → 400; ffmpeg missing or `NAS_MEDIA_TRANSCODE_ENABLED=false` → **503 `transcoding_unavailable`**.
+- `POST /media/libraries/{id}/transcode` (`media:admin`) → 202 `{"queued": n}`: pre-transcodes every video in the library that needs it.
+- `GET /info` lists `video_streaming` always and `video_transcoding` when transcoding is available.
+
+Audited: `media.transcode_requested`; failed transcodes write `media.transcode_failed` (outcome `failure`, with the ffmpeg error).
+
 ## Planned
 
-Media libraries (8), streaming (9). Each phase will extend this document.
+Monitoring and alerting (10), backups (11). Each phase will extend this document.

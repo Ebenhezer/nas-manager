@@ -10,6 +10,7 @@ from app.api.v1 import (
     files,
     groups,
     health,
+    media,
     public_uploads,
     remote_sync,
     remotes,
@@ -47,3 +48,4 @@ api_router.include_router(remote_sync.status_router)
 api_router.include_router(remote_sync.jobs_router)
 api_router.include_router(remote_sync.runs_router)
 api_router.include_router(remote_sync.conflicts_router)
+api_router.include_router(media.router)

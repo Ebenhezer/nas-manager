@@ -1,7 +1,7 @@
 # NAS Manager — Master Plan
 
-> Status: Phases 1–7 are **done and verified** (see `docs/IMPLEMENTATION_PLAN.md`).
-> **Phase 8 (Photo gallery and personal media libraries) is next.** This file is the
+> Status: Phases 1–9 are **done and verified** (see `docs/IMPLEMENTATION_PLAN.md`).
+> **Phase 10 (System monitoring and alerting) is next.** This file is the
 > authoritative copy of the project contract below.
 
 ---
@@ -70,9 +70,9 @@ Build a modular web application using Python 3, FastAPI, HTML, CSS and JavaScrip
 - **Phase 5**: Disk discovery, storage and RAID management. *(done)*
 - **Phase 6**: REST API, API tokens and mobile-client support. *(done)*
 - **Phase 7**: Cloud and remote synchronization. *(done)*
-- **Phase 8**: Photo gallery and personal media libraries. *(next)*
-- **Phase 9**: Video playback and streaming.
-- **Phase 10**: System monitoring and alerting.
+- **Phase 8**: Photo gallery and personal media libraries. *(done)*
+- **Phase 9**: Video playback and streaming. *(done)*
+- **Phase 10**: System monitoring and alerting. *(next)*
 - **Phase 11**: Backup and restore.
 - **Phase 12**: Configuration export and import.
 - **Phase 13**: Syslog and comprehensive auditing.

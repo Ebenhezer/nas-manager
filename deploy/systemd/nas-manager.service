@@ -30,9 +30,11 @@ LogsDirectoryMode=0750
 UMask=0027
 
 # Sandboxing. The web process never runs as root and holds no capabilities.
-# Later phases that need to write shares or media directories must add them
-# explicitly with ReadWritePaths=; privileged operations go through a separate
-# allowlisted helper service (Phase 5), never through this unit.
+# File roots, NAS_MEDIA_DIR and NAS_MEDIA_CACHE_DIR outside
+# /var/lib/nas-manager must be added explicitly, e.g.:
+# ReadWritePaths=/srv/nas /srv/media
+# Privileged operations go through a separate allowlisted helper service
+# (Phase 5), never through this unit.
 NoNewPrivileges=true
 CapabilityBoundingSet=
 AmbientCapabilities=

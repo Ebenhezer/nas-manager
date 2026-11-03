@@ -115,7 +115,7 @@ def _truncate_to_fit(text: str, budget: int) -> str:
     return text
 
 
-def _unique_path(directory: Path, name: str) -> Path:
+def unique_path(directory: Path, name: str) -> Path:
     """Return a free basename inside ``directory``, never overwriting.
 
     The first collision becomes ``stem (1).ext``, then ``(2)`` and so on.
@@ -282,7 +282,7 @@ def commit_staged(
                 },
             )
 
-        final = _unique_path(directory, name)
+        final = unique_path(directory, name)
         os.replace(staged, final)
         row = PublicUploadFile(
             uploader_key=key,

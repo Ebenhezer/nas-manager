@@ -263,6 +263,30 @@ def remote_sync_page(
     return templates.TemplateResponse(request, "remote_sync.html", _page_context(request, current))
 
 
+def _gallery(request: Request, current: CurrentUser | None, title: str, kind: str) -> Response:
+    redirect = _protected(current)
+    if redirect is not None:
+        return redirect
+    if current is None or "media:read" not in current.permissions:
+        raise UnauthorizedError("Missing required permission: media:read")
+    context = _page_context(request, current) | {"page_title": title, "default_kind": kind}
+    return templates.TemplateResponse(request, "gallery.html", context)
+
+
+@router.get("/gallery", response_class=HTMLResponse)
+def gallery_page(
+    request: Request, current: CurrentUser | None = Depends(resolve_web_user)
+) -> Response:
+    return _gallery(request, current, "Gallery", "")
+
+
+@router.get("/videos", response_class=HTMLResponse)
+def videos_page(
+    request: Request, current: CurrentUser | None = Depends(resolve_web_user)
+) -> Response:
+    return _gallery(request, current, "Videos", "video")
+
+
 @router.get("/profile", response_class=HTMLResponse)
 def profile_page(
     request: Request, current: CurrentUser | None = Depends(resolve_web_user)

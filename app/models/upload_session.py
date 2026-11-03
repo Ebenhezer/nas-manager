@@ -17,6 +17,8 @@ from app.db.base import Base, utcnow_naive
 
 TARGET_FILES = "files"
 TARGET_PUBLIC = "public"
+# Phase 8: the caller's personal media library (root = username).
+TARGET_MEDIA = "media"
 
 
 class UploadSession(Base):
@@ -31,7 +33,8 @@ class UploadSession(Base):
     )
     target: Mapped[str] = mapped_column(String(16), nullable=False)
     # Files target: the managed root and directory. Public target: the
-    # uploader key (root) and "" (rel_dir).
+    # uploader key (root) and "" (rel_dir). Media target: the owner's
+    # username (root) and the folder inside their personal library.
     root: Mapped[str] = mapped_column(Text, nullable=False)
     rel_dir: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
