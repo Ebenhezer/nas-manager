@@ -11,7 +11,7 @@ Status legend: **Done** (implemented and verified), **Next**, **Planned**.
 | 3 | File manager and Samba integration | **Done** |
 | 4 | Public upload folder and quotas | **Done** |
 | 5 | Disk discovery, storage and RAID management (+ privileged helper) | **Done** |
-| 6 | REST API, API tokens, mobile-client support | Planned |
+| 6 | REST API, API tokens, mobile-client support | **Done** |
 | 7 | Cloud and remote synchronization | Planned |
 | 8 | Photo gallery and personal media libraries | Planned |
 | 9 | Video playback and streaming | Planned |
@@ -168,9 +168,13 @@ Delivered:
 13. **The file manager is jailed to configured roots.** Every relative path is resolved and re-checked with `is_relative_to`; uploads land via a temp file + atomic rename so quota/cap checks happen before the final name exists. File roots are config (`NAS_FILE_ROOTS`), defaulting to `<data_dir>/files`.
 14. **Samba config is merged, not rewritten.** Only the range between the managed markers is touched; everything else is preserved verbatim, the result is validated with `testparm -s` against a temp copy, the previous file is backed up, and the write is atomic. Reloading `smbd` is a privileged step deferred to the Phase 5 helper; status reports `reload_required` rather than pretending it happened.
 15. **Least-privilege default with a runtime relaxation.** `operator`/`viewer` cannot open Files/Samba. An admin may flip `operator_view_files_samba` in Settings to grant operators read-only access; writes are never granted by the toggle.
-16. **The public drop folder is upload-only by design.** There is no public listing/download/search; a lightweight public policy endpoint exposes only whether uploads are enabled and the per-file cap. Quotas are keyed per uploader (`user:` when a session is present, `ip:` otherwise) and the quota check/reservation is one database transaction with the file's record (row lock → re-read → check → commit), so concurrent uploads cannot bypass a quota. Anonymous IP keying is a Phase 4 pragmatic default; token-keyed quotas arrive with Phase 6.
+16. **The public drop folder is upload-only by design.** There is no public listing/download/search; a lightweight public policy endpoint exposes only whether uploads are enabled and the per-file cap. Quotas are keyed per uploader (`user:` when a session is present, `ip:` otherwise) and the quota check/reservation is one database transaction with the file's record (row lock → re-read → check → commit), so concurrent uploads cannot bypass a quota. Anonymous IP keying is a Phase 4 pragmatic default; API-token clients are keyed `token:<id>` since Phase 6.
 17. **The drop folder never overwrites.** Colliding names are auto-uniquified (`photo (1).jpg`), the response returns the final stored name, and the byte-length-safe uniquifier keeps names within the 255-byte filesystem limit even after the counter suffix is appended.
 18. **Storage is the ledger, cleanup reconciles it.** `public_upload_files` records every accepted file; `public_upload_quotas.used_bytes` is incremented/decremented in the same transactions that insert/delete file rows. The admin cleanup endpoint removes stale temp files, optionally purges files older than N days (rows + disk, audited) and then recomputes every quota row from the remaining records, so out-of-band drift heals on demand.
+19. **API tokens are scoped and never exceed their owner.** Effective access is `scopes ∩ effective_permissions(owner)`, evaluated per request. Only SHA-256 is stored; the raw `nas_…` value is shown once. Tokens expire by default (`NAS_API_TOKEN_MAX_LIFETIME_DAYS`; `0` allows non-expiring tokens) and are revoked on admin password reset and deactivation, but not when users change their own password.
+20. **An `Authorization` header is authoritative.** When present it must be a valid bearer token (else 401 + `WWW-Authenticate`), and cookies are ignored for that request, which is why bearer requests skip CSRF. Token management, password change and logout are session-only (`require_session_auth`), so a leaked token cannot entrench itself. HTML pages stay cookie-only.
+21. **Resumable uploads reuse the single-shot commit path.** Bytes accumulate next to the destination (`.nas-resumable-<id>.part`, hidden from listings and spared by the drop-folder cleanup), every chunk is offset-checked and fsync'ed before the offset advances, and completion calls the same `commit_staged` helpers as multipart uploads, so the jail, overwrite and quota-lock guarantees are identical. The quota check at creation is advisory; the authoritative one runs at completion.
+22. **Sync is a journal, not a scanner.** Every file-manager mutation appends a `file_changes` row inside its own transaction; the id is the cursor. A cursor older than the retained journal (or from another database) gets `reset: true` and the client re-lists. Out-of-band changes (Samba, the shell) are deliberately out of scope for this phase.
 
 ## Known limitations
 
@@ -178,12 +182,13 @@ Delivered:
 - Only SQLite has been exercised; PostgreSQL support is configuration-only so far.
 - `instance_id` is stored but not yet used by any feature.
 - The per-IP login limiter is in-process (single process; resets on restart). The account lockout is persistent in the database.
-- Sessions are not yet exposed through the API for mobile clients (that is Phase 6 with tokens/resumable transfers).
+- The bearer-failure throttle and the per-upload resumable lock are in-process; a multi-process deployment needs shared state for both.
+- The sync journal records only changes made through the application; edits over Samba or directly on disk are not journaled (clients should re-list periodically).
 - Monitoring is limited to CPU, memory, swap, disk-usage entries and network byte counters; per-disk and RAID *discovery* exists (Phase 5) but there are no processes, services, RAID health curation or alerting yet (Phase 10).
 - No background job framework yet (needed from Phase 7 onward).
 - `smbd` reload is performed by the Phase 5 helper when `NAS_HELPER_ENABLED=true`; without the helper the web process still writes where it can and reports `reload_required`.
 - The file manager has no per-share or per-user folder permissions yet; access is governed by the `files:*`/`samba:*` permissions and the operator toggle. Only the helper can mount/umount disks; there is no fstab persistence or auto-mount yet.
-- Anonymous public-upload quotas are keyed by client IP (`ip:`) — NAT/proxies coalesce addresses and botnets can fragment them; per-token quotas arrive with the Phase 6 API tokens. Uploads are also served on whatever interface the app binds; a public deployment must put the drop page behind TLS and (optionally) a rate limit.
+- Anonymous public-upload quotas are keyed by client IP (`ip:`) — NAT/proxies coalesce addresses and botnets can fragment them; API-token clients get their own `token:<id>` quota (Phase 6). The anonymous drop endpoint is not rate limited yet. Uploads are also served on whatever interface the app binds; a public deployment must put the drop page behind TLS and (optionally) a rate limit.
 
 ## Phase 5: completed
 
@@ -221,7 +226,37 @@ Delivered:
 - The Disks page was exercised via TestClient/curl, not a real browser.
 - PostgreSQL still not exercised (URL-driven only).
 
-## Phase 6: planned
+## Phase 6: completed
 
-REST API, API tokens and mobile-client support (resumable uploads, sync cursors, per-token upload quotas).
+Delivered:
+
+- **Personal API tokens** (`app/services/api_tokens.py`, `app/api/v1/api_tokens.py`, migration `0006` table `api_tokens`). `nas_` + 256-bit random tokens, stored as SHA-256 and shown once. Scopes are validated against the registry and must be a subset of the creator's permissions; effective access is `scopes ∩ owner's current permissions`. Name uniqueness per user, per-user cap, default/maximum lifetime, `last_used_at`/`last_used_ip` (written at most once a minute). Owner endpoints `GET/POST /tokens`, `DELETE /tokens/{id}`, `GET /tokens/scopes`; admin oversight `GET /admin/tokens`, `DELETE /admin/tokens/{id}` (new `api_tokens:read`/`api_tokens:write`; admin both, operator read). Tokens are revoked on admin password reset and on deactivation. Audited (`api_token.created/revoked/auth_failed`).
+- **Bearer authentication** in `get_current_user`. An `Authorization` header is authoritative (bad value → 401 + `WWW-Authenticate: Bearer`, never a cookie fallback); failed lookups are rate limited per IP by a separate throttle (429 + `Retry-After`). `CurrentUser` carries `token`/`auth_method`; `/auth/me` reports them. Logout, change-password and token management are session-only (`require_session_auth`). The CSRF middleware skips bearer requests.
+- **Per-token upload quotas.** Drop-folder uploads with a bearer token are keyed `token:<id>` with their own default quota (`NAS_API_TOKEN_UPLOAD_QUOTA_BYTES`); an invalid token on the drop endpoint is a 401 instead of a silent IP fallback.
+- **Resumable uploads** (`app/services/resumable_uploads.py`, `app/api/v1/uploads.py`, table `upload_sessions`): `POST /uploads` → `PATCH` with `Upload-Offset` → `POST …/complete` (optional SHA-256), plus `HEAD`/`GET` for the offset, `DELETE` to abort and `POST /uploads/cleanup`. Works for the `files` target (needs `files:write` at every step) and the `public` drop folder. Chunks are bounded, offset-checked, fsync'ed and rolled back on limit violations, and bytes received before a disconnect are kept. Completion goes through new shared `files.commit_staged` / `public_uploads.commit_staged` helpers (refactored out of the multipart paths), so the jail, overwrite and quota-lock rules are unchanged. Expired sessions are swept. Staging files are hidden from listings and search.
+- **Sync cursors** (`app/services/sync.py`, `app/api/v1/sync.py`, table `file_changes`): every upload/overwrite/mkdir/rename/delete is journaled in its own transaction. `GET /sync/cursor` and `GET /sync/changes?root&cursor&limit` page forward with `has_more`, and return `reset` for pruned, foreign or future cursors. Retention is `NAS_SYNC_CHANGE_RETENTION_DAYS`.
+- **Client discovery and downloads**: public `GET /info` (API version, feature flags, limits); `GET /files/content` serves `Range` requests (206), verified by test.
+- **Web UI**: Profile has a "My API tokens" card (create with scope checkboxes and expiry, copy the one-time secret, revoke). There is an admin `/tokens` page with a permission-gated nav link. Both are CSP-compatible (DOM via `textContent`).
+- **Settings**: `NAS_API_TOKEN_*`, `NAS_RESUMABLE_*`, `NAS_SYNC_CHANGE_RETENTION_DAYS` (documented in both env templates).
+
+### Verification (executed in this workspace, Python 3.12.3, Ubuntu 24.04)
+
+| Check | Result |
+|-------|--------|
+| `pytest` | 342 passed (304 before Phase 6; +38 in `test_api_tokens.py`, `test_resumable_uploads.py`, `test_sync.py`, `test_public_uploads.py`, `test_dashboard.py`) |
+| Coverage (`app/`) | 90 % overall; `sync` 100 %, `api_tokens` service 96 %, `resumable_uploads` 92 %, new routers 99–100 % |
+| `ruff check` / `ruff format --check` | clean (135 files) |
+| `mypy` (strict, `app` + `tests`) | no issues in 120 source files |
+| `alembic upgrade head` on a fresh directory | applies `0001`–`0006`; drift test clean; `downgrade 0005` drops the three tables and the `api_tokens:*` grants; re-upgrade works |
+| Live server smoke (`python -m app`, curl) | login → create token (201) → `/auth/me` via Bearer reports `auth_method: token` with the token's scopes → `/sync/cursor` `c0` → resumable upload of 21 bytes in two PATCH chunks (offset 10 after the first, `HEAD` agrees) → complete with SHA-256 (200) → `Range: bytes=6-14` → 206 with the expected bytes → `/sync/changes` lists the `created` entry, cursor `c1` → revoke (204) → the token returns 401 → `/info` public |
+| Tokens | raw value shown once / hash only stored; scope intersection and shrink-on-role-loss; scope escalation refused; expired/revoked/malformed → 401 without cookie fallback; throttle → 429 with only in-window failures audited; tokens cannot mint tokens, change the password or log out; admin oversight and operator read-only; password reset and deactivation revoke |
+| Resumable uploads | multi-chunk round-trip; resume after a lost acknowledgement; wrong offset → 409 with the current offset; disconnect keeps received bytes; chunk/total limits roll back; checksum mismatch discards; jail/traversal/unknown root rejected; a name that appears while the upload is open → 409 with bytes kept; owner-only (404); `files:write` required; open-upload cap; expiry sweep; token-keyed public quota with authoritative check at completion (413, no leftovers); drop-folder cleanup spares staging files; concurrent request → 409 |
+| Sync | every mutation kind journaled in order; pagination; reset for future/pruned/never-synced cursors; malformed cursor 400; unknown root 404; `files:read` required |
+
+### Not verified
+
+- The new UI (Profile → My API tokens, the `/tokens` admin page) was checked through TestClient only, for page rendering and the absence of inline code. It was not used in a real browser, and the JavaScript was not syntax-checked because no Node runtime is available in this workspace.
+- No real mobile client was exercised. The protocol was driven through TestClient and curl.
+- The resumable-upload lock and the bearer-failure throttle were exercised in a single process only.
+- PostgreSQL still not exercised.
 

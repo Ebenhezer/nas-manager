@@ -67,6 +67,7 @@ def test_management_pages_require_authentication(client: TestClient) -> None:
         "/samba",
         "/settings",
         "/uploads",
+        "/tokens",
     ]:
         response = client.get(path, follow_redirects=False)
         assert response.status_code == 302, path
@@ -83,7 +84,9 @@ def test_dashboard_has_no_inline_script_or_style(page: TestClient) -> None:
     assert inline_scripts == []
 
 
-@pytest.mark.parametrize("path", ["/files", "/samba", "/settings", "/uploads", "/public/upload"])
+@pytest.mark.parametrize(
+    "path", ["/files", "/samba", "/settings", "/uploads", "/public/upload", "/tokens", "/profile"]
+)
 def test_phase3_pages_have_no_inline_script_or_style(page: TestClient, path: str) -> None:
     """Phase 3/4 pages must stay within the same CSP (no inline code)."""
     html = page.get(path).text.lower()
@@ -92,6 +95,15 @@ def test_phase3_pages_have_no_inline_script_or_style(page: TestClient, path: str
     assert "onclick=" not in html
     inline_scripts = [s for s in html.split("<script")[1:] if "src=" not in s.split(">")[0]]
     assert inline_scripts == []
+
+
+def test_change_password_fields_match_profile_js(page: TestClient) -> None:
+    """profile.js reads FormData("current"/"new"); the inputs must carry those names."""
+    html = page.get("/profile").text
+    script = (STATIC_DIR / "js" / "profile.js").read_text()
+    for name in ("current", "new"):
+        assert f'name="{name}"' in html
+        assert f'data.get("{name}")' in script
 
 
 @pytest.mark.parametrize(
@@ -106,6 +118,8 @@ def test_phase3_pages_have_no_inline_script_or_style(page: TestClient, path: str
         "/static/js/groups.js",
         "/static/js/audit.js",
         "/static/js/profile.js",
+        "/static/js/api_tokens.js",
+        "/static/js/api_tokens_admin.js",
         "/static/js/files.js",
         "/static/js/samba.js",
         "/static/js/settings.js",

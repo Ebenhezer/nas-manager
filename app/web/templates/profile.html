@@ -12,11 +12,11 @@
   <form id="change-password-form" class="card card-body">
     <div class="mb-3">
       <label class="form-label" for="cp-current">Current password</label>
-      <input class="form-control" type="password" id="cp-current" autocomplete="current-password" required>
+      <input class="form-control" type="password" id="cp-current" name="current" autocomplete="current-password" required>
     </div>
     <div class="mb-3">
       <label class="form-label" for="cp-new">New password</label>
-      <input class="form-control" type="password" id="cp-new" autocomplete="new-password" required
+      <input class="form-control" type="password" id="cp-new" name="new" autocomplete="new-password" required
              minlength="12">
     </div>
     <button type="submit" class="btn btn-primary">Change password</button>
@@ -25,7 +25,60 @@
     New passwords must be at least 12 characters and different from the username.
   </p>
 </div>
+
+<div class="card mt-5">
+  <div class="card-header">My API tokens</div>
+  <div class="card-body">
+    <p class="text-body-secondary small">
+      Tokens let scripts and the mobile app call the API with
+      <code>Authorization: Bearer &lt;token&gt;</code>. A token only carries the scopes you
+      select, never more than your own permissions, and stops working when you revoke it.
+    </p>
+    <div id="token-error" class="alert alert-danger d-none" role="alert"></div>
+    <div id="token-created" class="alert alert-warning d-none" role="status">
+      <div class="fw-semibold mb-1">Copy this token now. It will not be shown again.</div>
+      <div class="d-flex gap-2 align-items-center">
+        <code id="token-value" class="text-break flex-grow-1"></code>
+        <button type="button" id="token-copy" class="btn btn-sm btn-outline-secondary">Copy</button>
+      </div>
+    </div>
+    <form id="token-form" class="row g-3 mb-4">
+      <div class="col-md-5">
+        <label class="form-label" for="token-name">Name</label>
+        <input class="form-control" id="token-name" name="name" maxlength="64" required
+               placeholder="e.g. Phone backup">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="token-days">Expires in (days)</label>
+        <input class="form-control" type="number" id="token-days" name="days" min="0">
+      </div>
+      <div class="col-12">
+        <span class="form-label d-block">Scopes</span>
+        <div id="token-scopes" class="d-flex flex-wrap gap-3"></div>
+      </div>
+      <div class="col-12">
+        <button type="submit" class="btn btn-primary">Create token</button>
+      </div>
+    </form>
+    <div class="table-responsive">
+      <table class="table table-striped align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Token</th>
+            <th>Scopes</th>
+            <th>Expires</th>
+            <th>Last used</th>
+            <th class="text-end">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="token-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
 {% endblock %}
 {% block scripts %}
 <script type="module" src="{{ url_for('static', path='js/profile.js') }}"></script>
+<script type="module" src="{{ url_for('static', path='js/api_tokens.js') }}"></script>
 {% endblock %}

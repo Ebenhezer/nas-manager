@@ -7,7 +7,7 @@ to reconstruct "who did what, when, and did it succeed".
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TypedDict
 
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
@@ -26,6 +26,8 @@ CATEGORY_SAMBA = "samba"
 CATEGORY_PUBLIC_UPLOAD = "public_upload"
 CATEGORY_DISK = "disk"
 CATEGORY_RAID = "raid"
+CATEGORY_API_TOKEN = "api_token"  # noqa: S105
+CATEGORY_UPLOAD = "upload"
 
 OUTCOME_SUCCESS = "success"
 OUTCOME_FAILURE = "failure"
@@ -96,6 +98,34 @@ DISK_HELPER_UNAVAILABLE = "disk.helper_unavailable"
 # raid events (Phase 5)
 RAID_SCRUB_STARTED = "raid.scrub_started"
 RAID_ACTION_FAILED = "raid.action_failed"
+
+# api token events (Phase 6); the names contain "token", which ruff's S105
+# heuristic would otherwise flag as credentials.
+API_TOKEN_CREATED = "api_token.created"  # noqa: S105
+API_TOKEN_REVOKED = "api_token.revoked"  # noqa: S105
+API_TOKEN_AUTH_FAILED = "api_token.auth_failed"  # noqa: S105
+
+# resumable upload events (Phase 6)
+UPLOAD_SESSION_CREATED = "upload.session_created"
+UPLOAD_SESSION_COMPLETED = "upload.session_completed"
+UPLOAD_SESSION_ABORTED = "upload.session_aborted"
+UPLOAD_SESSION_EXPIRED = "upload.session_expired"
+
+
+class RequestContext(TypedDict):
+    ip_address: str | None
+    user_agent: str | None
+    request_id: str | None
+
+
+def request_context(context: dict[str, str | None] | None) -> RequestContext:
+    """Typed request metadata for ``record_audit_event(**...)``."""
+    source = context or {}
+    return {
+        "ip_address": source.get("ip_address"),
+        "user_agent": source.get("user_agent"),
+        "request_id": source.get("request_id"),
+    }
 
 
 def record_audit_event(

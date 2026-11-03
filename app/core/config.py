@@ -128,6 +128,25 @@ class Settings(BaseSettings):
     public_upload_max_file_bytes: int = Field(default=_GIB, ge=1024)
     public_upload_default_quota_bytes: int = Field(default=_GIB, ge=1)
 
+    # ------------------------------------------------------------------
+    # API tokens and mobile clients (Phase 6). Tokens are personal,
+    # scoped bearer credentials (``Authorization: Bearer nas_...``).
+    # NAS_API_TOKEN_MAX_LIFETIME_DAYS=0 allows tokens that never expire.
+    # Failed bearer lookups are rate limited per client IP, like logins.
+    # ------------------------------------------------------------------
+    api_token_max_per_user: int = Field(default=20, ge=1, le=1000)
+    api_token_default_lifetime_days: int = Field(default=90, ge=1, le=3650)
+    api_token_max_lifetime_days: int = Field(default=365, ge=0, le=3650)
+    api_token_upload_quota_bytes: int = Field(default=_GIB, ge=1)
+    api_token_auth_max_failures: int = Field(default=20, ge=1, le=10000)
+    api_token_auth_window_seconds: int = Field(default=300, ge=10, le=86400)
+
+    # Resumable (chunked) uploads and the sync change journal.
+    resumable_upload_ttl_hours: int = Field(default=24, ge=1, le=24 * 30)
+    resumable_chunk_max_bytes: int = Field(default=64 * 1024 * 1024, ge=64 * 1024)
+    resumable_max_open_per_user: int = Field(default=10, ge=1, le=1000)
+    sync_change_retention_days: int = Field(default=30, ge=1, le=3650)
+
     @field_validator(
         "data_dir",
         "log_dir",
@@ -165,6 +184,13 @@ class Settings(BaseSettings):
             raise ValueError("SameSite=None requires NAS_SESSION_COOKIE_SECURE=true")
         if self.session_idle_max_seconds < self.session_ttl_seconds:
             raise ValueError("NAS_SESSION_IDLE_MAX_SECONDS may not be shorter than the TTL")
+        if (
+            self.api_token_max_lifetime_days
+            and self.api_token_default_lifetime_days > self.api_token_max_lifetime_days
+        ):
+            raise ValueError(
+                "NAS_API_TOKEN_DEFAULT_LIFETIME_DAYS may not exceed NAS_API_TOKEN_MAX_LIFETIME_DAYS"
+            )
         if self.argon2_memory_cost < 8 * self.argon2_parallelism:
             raise ValueError("NAS_ARGON2_MEMORY_COST must be at least 8 * NAS_ARGON2_PARALLELISM")
         return self

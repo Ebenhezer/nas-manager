@@ -39,20 +39,20 @@ Rules: routes validate and delegate; services hold logic and talk to the OS or d
 | `app/core/errors.py` | `AppError` hierarchy and the JSON error envelope |
 | `app/core/permissions.py` | Permission-token registry and default role grants |
 | `app/db/` | Naming conventions, engine/session factory, migration helpers, `get_db` |
-| `app/api/v1/deps.py` | `CurrentUser`, `get_current_user`, `require_permission(...)` |
-| `app/api/v1/` | `auth`, `users`, `groups`, `roles`, `audit`, `health`, `system`, `files`, `samba`, `settings`, `public_uploads`, `disks` |
-| `app/services/` | `passwords`, `auth_service`, `users_service`, `groups_service`, `roles_service`, `security`, `audit`, `throttle`, `bootstrap_service`, `health`, `monitoring`, `settings_service`, `files`, `samba`, `public_uploads` |
+| `app/api/v1/deps.py` | `CurrentUser` (session or API token), `get_current_user`, `require_permission(...)`, `require_session_auth` |
+| `app/api/v1/` | `auth`, `users`, `groups`, `roles`, `audit`, `health`, `system`, `files`, `samba`, `settings`, `public_uploads`, `disks`, `api_tokens`, `uploads` (resumable), `sync` (+ `/info`) |
+| `app/services/` | `passwords`, `auth_service`, `users_service`, `groups_service`, `roles_service`, `security`, `audit`, `throttle`, `bootstrap_service`, `health`, `monitoring`, `settings_service`, `files`, `samba`, `public_uploads`, `api_tokens`, `resumable_uploads`, `sync` |
 | `app/services/helper_client.py` | Thin `AF_UNIX` client for the privileged helper; maps helper errors to typed `AppError`s (503 unavailable, 400 validation/intent/operation) |
 | `app/services/disks.py` | Disk/volume/RAID discovery parsing (`lsblk`, `findmnt`, `/proc/mdstat`, `smartctl`), preview + confirmed actions, audit |
 | `app/helper/` | Privileged helper (root process): `operations.py` fixed allowlist, `server.py` Unix socket + `SO_PEERCRED`, `protocol.py` framing/intent digest, `__main__.py` entry |
-| `app/models/` | `user`, `group`, `role`, `session`, `audit_event`, `app_setting`, `samba_share`, `public_upload` |
-| `app/web/` | Jinja2 templates + modular JS (login, dashboard, users, groups, audit, profile, files, samba, settings, uploads, public_upload, disks) |
+| `app/models/` | `user`, `group`, `role`, `session`, `audit_event`, `app_setting`, `samba_share`, `public_upload`, `api_token`, `upload_session`, `file_change` |
+| `app/web/` | Jinja2 templates + modular JS (login, dashboard, users, groups, audit, profile + API tokens, files, samba, settings, uploads, public_upload, disks, api_tokens admin) |
 
 ## Authentication and authorization
 
 1. `POST /api/v1/auth/login` (or the `/login` form) verifies the password with Argon2id after a per-IP throttle check, then creates a server-side `auth_sessions` row. The database stores only SHA-256 of the token and of the CSRF token; the browser keeps the raw session token in an `HttpOnly` cookie.
 2. Every request passes through `CSRFProtectMiddleware`: state-changing requests that carry the `nas_csrf` cookie must echo it (`X-CSRF-Token` header or `_csrf` form field), and authenticated requests must additionally match the digest bound to their session.
-3. `get_current_user` resolves the session cookie, rejects revoked/expired sessions and deactivated users, and slides the idle expiry window. `require_permission("permission")` guards each route: 401 anonymous, 403 without the permission.
+3. `get_current_user` resolves an `Authorization: Bearer` API token when the header is present (authoritative: a bad value is 401), otherwise the session cookie; it rejects revoked/expired sessions or tokens and deactivated users, and slides the idle expiry window. A token's permissions are its scopes ∩ the owner's effective permissions; `require_session_auth` keeps account-control endpoints (token management, password change, logout) session-only. `require_permission("permission")` guards each route: 401 anonymous, 403 without the permission.
 4. Effective permissions = union of the permissions of the user's direct roles and of the roles granted to the user's groups (`app/services/security.py`).
 5. Login abuse controls: persistent per-account lockout (threshold and cooldown in settings) plus an in-process per-IP sliding window (429). All outcomes are written to `audit_events`.
 
@@ -84,6 +84,13 @@ The web process never executes arbitrary commands and never runs as root. The he
 - **Runtime settings.** `app/services/settings_service.py` stores non-secret key/value switches in `app_settings` (e.g. `operator_view_files_samba`, `public_upload_enabled`). `app/services/security.py::effective_permissions_for_user` consults that switch, so the API guards and the web pages pick it up without separate plumbing.
 - **Public upload folder.** `app/services/public_uploads.py` owns the drop folder (`NAS_PUBLIC_UPLOAD_DIR`, default `<data_dir>/uploads`) and is the only module that writes to it. It is upload-only (no public listing/download/search); a public policy endpoint exposes only the enabled flag and the per-file cap. Files land in per-uploader subdirectories named `sha256(uploader_key)[:24]`, stream to a temp file and are atomically renamed with auto-uniquified names (never overwrite; names stay ≤ 255 bytes even after the counter suffix). Usage is keyed `user:<name>` / `ip:<address>`. The quota check and reservation live in the same transaction as the file record: the uploader's `public_upload_quotas` row is locked with an `UPDATE`, re-read under the lock, and `used_bytes` incremented with the `public_upload_files` insert — serialising concurrent uploads on SQLite (WAL single writer) and PostgreSQL (row lock). Deletes and age-purging decrement/reconcile the ledger; cleanup removes stale temp files and reconciles every quota row from the remaining file records. Both `public_upload_*` tables and the `uploads:read`/`uploads:write` tokens come from migration `0004`.
 
+## API tokens, resumable uploads and sync (Phase 6)
+
+- **API tokens.** `app/services/api_tokens.py` mints `nas_…` tokens (SHA-256 stored in `api_tokens`, raw value returned once), validates scopes against the registry and the creator's permissions, enforces lifetime and per-user caps, and revokes. The CSRF middleware skips `Authorization: Bearer` requests; a dedicated in-process `token_throttle` limits failed lookups per IP.
+- **Resumable uploads.** `app/services/resumable_uploads.py` keeps one `upload_sessions` row per in-flight upload and accumulates bytes in `.nas-resumable-<id>.part` next to the destination. `PATCH` appends at an exact offset under a per-upload lock and fsyncs before advancing; completion reuses `files.commit_staged` / `public_uploads.commit_staged`, the same commit path as single-shot uploads (jail/overwrite re-check, or quota lock + reservation).
+- **Sync cursors.** `app/services/sync.py` appends a `file_changes` row for every file-manager mutation inside the mutation's own transaction; the row id is the cursor. `changes_since` pages forward per root and answers `reset` when the cursor predates the retained journal; `prune` drops rows past `NAS_SYNC_CHANGE_RETENTION_DAYS` (keeping the newest).
+- Migration `0006` adds the three tables and the `api_tokens:read`/`api_tokens:write` permissions (admin both, operator read).
+
 ## Planned additions
 
-API tokens (6), sync engine and persistent job queue (7), gallery (8), streaming (9), alerting (10), backups (11), config export/import (12), audit/syslog (13).
+Sync engine and persistent job queue (7), gallery (8), streaming (9), alerting (10), backups (11), config export/import (12), audit/syslog (13).

@@ -49,6 +49,9 @@ class User(Base):
     sessions: Mapped[list[AuthSession]] = relationship(
         back_populates="user", cascade="all, delete-orphan", passive_deletes=True
     )
+    api_tokens: Mapped[list[ApiToken]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", passive_deletes=True
+    )
 
     @property
     def is_locked(self) -> bool:
@@ -56,6 +59,7 @@ class User(Base):
 
 
 # Imported for `secondary="user_roles"` string resolution and type checking.
+from app.models.api_token import ApiToken  # noqa: E402
 from app.models.group import Group  # noqa: E402
 from app.models.role import Role  # noqa: E402
 from app.models.session import AuthSession  # noqa: E402

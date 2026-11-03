@@ -19,10 +19,13 @@ class AppError(Exception):
     status_code = 500
     code = "internal_error"
 
-    def __init__(self, message: str, *, details: Any = None) -> None:
+    def __init__(
+        self, message: str, *, details: Any = None, headers: dict[str, str] | None = None
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.details = details
+        self.headers = headers
 
 
 class NotFoundError(AppError):
@@ -93,7 +96,12 @@ def _request_id(request: Request) -> str | None:
 
 
 def error_response(
-    request: Request, status_code: int, code: str, message: str, details: Any = None
+    request: Request,
+    status_code: int,
+    code: str,
+    message: str,
+    details: Any = None,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     body: dict[str, Any] = {
         "error": {
@@ -103,7 +111,7 @@ def error_response(
             "request_id": _request_id(request),
         }
     }
-    response = JSONResponse(status_code=status_code, content=body)
+    response = JSONResponse(status_code=status_code, content=body, headers=headers)
     request_id = _request_id(request)
     if request_id:
         response.headers["X-Request-ID"] = request_id
@@ -113,7 +121,9 @@ def error_response(
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def _app_error(request: Request, exc: AppError) -> JSONResponse:
-        return error_response(request, exc.status_code, exc.code, exc.message, exc.details)
+        return error_response(
+            request, exc.status_code, exc.code, exc.message, exc.details, exc.headers
+        )
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:

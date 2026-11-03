@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    api_tokens,
     audit,
     auth,
     disks,
@@ -13,7 +14,9 @@ from app.api.v1 import (
     roles,
     samba,
     settings,
+    sync,
     system,
+    uploads,
     users,
 )
 
@@ -32,3 +35,8 @@ api_router.include_router(disks.router)
 api_router.include_router(disks.storage_router)
 api_router.include_router(public_uploads.router_public)
 api_router.include_router(public_uploads.router_admin)
+api_router.include_router(api_tokens.router)
+api_router.include_router(api_tokens.admin_router)
+api_router.include_router(uploads.router)
+api_router.include_router(sync.router)
+api_router.include_router(sync.info_router)

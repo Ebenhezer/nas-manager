@@ -118,7 +118,7 @@ def logout_submit(
     current: CurrentUser | None = Depends(resolve_web_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    if current is not None:
+    if current is not None and current.session is not None:
         auth_service.logout(db, current.session, actor=current.user)
     response = RedirectResponse("/login", status_code=303)
     settings = request.app.state.settings
@@ -237,6 +237,18 @@ def uploads_page(
     if current is None or "uploads:read" not in current.permissions:
         raise UnauthorizedError("Missing required permission: uploads:read")
     return templates.TemplateResponse(request, "uploads.html", _page_context(request, current))
+
+
+@router.get("/tokens", response_class=HTMLResponse)
+def api_tokens_page(
+    request: Request, current: CurrentUser | None = Depends(resolve_web_user)
+) -> Response:
+    redirect = _protected(current)
+    if redirect is not None:
+        return redirect
+    if current is None or "api_tokens:read" not in current.permissions:
+        raise UnauthorizedError("Missing required permission: api_tokens:read")
+    return templates.TemplateResponse(request, "api_tokens.html", _page_context(request, current))
 
 
 @router.get("/profile", response_class=HTMLResponse)

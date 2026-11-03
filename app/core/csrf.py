@@ -8,9 +8,12 @@ Defence in depth on top of SameSite cookies:
   echoed token must additionally match the digest stored in the session row,
   so a stolen CSRF cookie alone is useless.
 
-Pure API clients (Bearer tokens, Phase 6) that send *no* cookies are not
-blocked. The cookie is delivered to browsers on HTML responses (and the login
-route sets it explicitly on the login response).
+Pure API clients that send *no* cookies are not blocked, and neither are
+requests that carry ``Authorization: Bearer`` (Phase 6): the API then
+authenticates with the token alone and ignores cookies, and a browser cannot
+attach that header to a cross-site request without a CORS preflight, which
+this application never grants. The cookie is delivered to browsers on HTML
+responses (and the login route sets it explicitly on the login response).
 """
 
 from __future__ import annotations
@@ -79,7 +82,10 @@ class CSRFProtectMiddleware(BaseHTTPMiddleware):
 
     def _csrf_required(self, request: Request) -> bool:
         """A check applies when the client carries either cookie; a cookie-less
-        client (an API caller without browser state) cannot be CSRF-attacked."""
+        client (an API caller without browser state) cannot be CSRF-attacked,
+        and a bearer-authenticated request is authorised by its header only."""
+        if request.headers.get("authorization", "").lower().startswith("bearer "):
+            return False
         return bool(
             request.cookies.get(self.csrf_cookie_name)
             or request.cookies.get(self.session_cookie_name)

@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}API tokens · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between gap-2 mb-4">
+  <h1 class="h3 mb-0">API tokens</h1>
+  <a class="btn btn-outline-secondary" href="/profile">Manage my tokens</a>
+</div>
+<div id="error-banner" class="alert alert-danger d-none" role="alert"></div>
+<div class="card">
+  <div class="card-header">All users' tokens</div>
+  <div class="table-responsive">
+    <table class="table table-striped align-middle mb-0" id="tokens-table"
+           data-can-write="{{ 'true' if can('api_tokens:write') else 'false' }}">
+      <thead>
+        <tr>
+          <th>User</th>
+          <th>Name</th>
+          <th>Token</th>
+          <th>Scopes</th>
+          <th>Created</th>
+          <th>Expires</th>
+          <th>Last used</th>
+          <th class="text-end">Status</th>
+        </tr>
+      </thead>
+      <tbody id="tokens-body"></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script type="module" src="{{ url_for('static', path='js/api_tokens_admin.js') }}"></script>
+{% endblock %}

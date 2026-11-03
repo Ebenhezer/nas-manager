@@ -132,6 +132,15 @@
           <span>Audit</span>
         </a>
         {% endif %}
+        {% if can('api_tokens:read') %}
+        <a class="app-nav-link{% if request.url.path == '/tokens' %} active{% endif %}" href="/tokens"{% if request.url.path == '/tokens' %} aria-current="page"{% endif %}>
+          <svg class="app-nav-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="8" cy="15" r="4"/>
+            <path d="M10.8 12.2 20 3M17 6l3 3M14 9l2 2"/>
+          </svg>
+          <span>API tokens</span>
+        </a>
+        {% endif %}
       </nav>
 
       <div class="app-sidebar-footer">

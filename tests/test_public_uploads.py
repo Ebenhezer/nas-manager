@@ -426,3 +426,38 @@ def test_quota_row_created_on_first_upload_and_shared_across_uploads(
     assert len(quotas) == 1
     assert quotas[0].used_bytes == 20
     assert len(files) == 2
+
+
+def test_bearer_upload_is_charged_to_the_token(
+    app: FastAPI, authed_client: TestClient, csrf_header: dict[str, str]
+) -> None:
+    token = authed_client.post(
+        "/api/v1/tokens", json={"name": "cam", "scopes": ["dashboard:read"]}, headers=csrf_header
+    ).json()
+    app.state.settings.api_token_upload_quota_bytes = 7
+    with TestClient(app) as phone:
+        bearer = {"Authorization": f"Bearer {token['token']}"}
+        ok = phone.post(
+            "/api/v1/public/uploads",
+            files={"file": ("a.jpg", b"1234", "image/jpeg")},
+            headers=bearer,
+        )
+        assert ok.status_code == 201, ok.text
+        assert ok.json()["uploader_key"] == f"token:{token['id']}"
+        over = phone.post(
+            "/api/v1/public/uploads",
+            files={"file": ("b.jpg", b"5678", "image/jpeg")},
+            headers=bearer,
+        )
+        assert over.status_code == 413
+        # A bad token is an error, not a silent fallback to the IP quota.
+        invalid = phone.post(
+            "/api/v1/public/uploads",
+            files={"file": ("c.jpg", b"1", "image/jpeg")},
+            headers={"Authorization": "Bearer nas_" + "z" * 43},
+        )
+        assert invalid.status_code == 401
+    with app.state.db.session_factory() as session:
+        quota = session.get(PublicUploadQuota, f"token:{token['id']}")
+        assert quota is not None
+        assert (quota.quota_bytes, quota.used_bytes) == (7, 4)

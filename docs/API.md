@@ -20,8 +20,8 @@ Base path: `/api/v1`. All responses are JSON. Interactive docs (`/api/docs`) are
 
 Codes in use: `http_error` (404, 405, ...), `validation_error` (422), `conflict` (409), `not_found` (404), `bad_request` (400), `unauthorized` (401), `forbidden` (403), `too_many_requests` (429), `csrf_failure` (403), `quota_exceeded` (413), `service_unavailable` (503), `internal_error` (500).
 
-- **Authentication**: except `GET /health`, the public upload endpoints, the `/public/upload` page and the static assets, every endpoint requires a session cookie (`nas_session`, `HttpOnly`) obtained from `POST /auth/login` (JSON) or the `/login` form. Anonymous calls return `401`; an authenticated caller without the required permission returns `403`.
-- **CSRF**: state-changing requests that carry browser cookies must echo the `nas_csrf` cookie value via the `X-CSRF-Token` header (or the `_csrf` form field). Authenticated requests must echo the token bound to the session. A cookie-less client (e.g., a script) is not blocked.
+- **Authentication**: except `GET /health`, `GET /info`, the public upload endpoints, the `/public/upload` page and the static assets, every endpoint requires either a session cookie (`nas_session`, `HttpOnly`) obtained from `POST /auth/login` (JSON) or the `/login` form, **or** a personal API token sent as `Authorization: Bearer nas_…` (see [API tokens](#api-tokens)). When an `Authorization` header is present it is authoritative: an invalid, expired, revoked or non-Bearer value returns `401` with `WWW-Authenticate: Bearer` even if a valid session cookie is also sent. Anonymous calls return `401`; an authenticated caller without the required permission returns `403`.
+- **CSRF**: state-changing requests that carry browser cookies must echo the `nas_csrf` cookie value via the `X-CSRF-Token` header (or the `_csrf` form field). Authenticated requests must echo the token bound to the session. Cookie-less clients and requests carrying `Authorization: Bearer` are not CSRF-checked (browsers cannot attach that header cross-site without CORS, which is never enabled).
 - Role and group fields use summary objects; `roles`/`groups` are returned with their nested summaries.
 
 ## Public endpoints
@@ -74,9 +74,14 @@ Revokes the session and clears both cookies.
   "roles": ["admin"],
   "groups": [],
   "permissions": ["audit:read", "dashboard:read"],
-  "session_expires_at": "2026-10-20T11:00:00"
+  "session_expires_at": "2026-10-20T11:00:00",
+  "auth_method": "session",
+  "token_name": null,
+  "token_expires_at": null
 }
 ```
+
+With a bearer token, `auth_method` is `"token"`, `session_expires_at` is `null`, `token_name`/`token_expires_at` describe the token and `permissions` are the token's effective scopes. `POST /auth/logout` and `POST /auth/change-password` require a session (`403` for tokens).
 
 ### `POST /auth/change-password` → 200
 
@@ -236,7 +241,61 @@ Every action has a `…/preview` endpoint that shows the exact plan, data-loss w
 
 The Samba page's `POST /samba/apply` integrates with the same helper (see above).
 
+## API tokens
+
+Personal, scoped bearer credentials for scripts and mobile clients. The raw value (`nas_` + 43 URL-safe characters) is returned **once** at creation; the server stores only its SHA-256. A token's effective permissions are its `scopes` ∩ the owner's *current* effective permissions, so removing a role from the owner immediately narrows every token they hold. Creating and revoking tokens requires an interactive session — a token cannot mint or revoke tokens, change the password or log out (`403`). Tokens are revoked automatically when an admin resets the owner's password or deactivates the account (a user changing their own password keeps their tokens).
+
+- `GET /tokens/scopes` (session) → `{"scopes": [...], "default_lifetime_days": 90, "max_lifetime_days": 365, "max_per_user": 20}` — the scopes the caller may grant (their own permissions).
+- `POST /tokens` (session) — body `{"name": "Phone", "scopes": ["files:read", "files:write"], "expires_in_days": 30}` → 201:
+
+```json
+{"id": 3, "user_id": 1, "name": "Phone", "token_prefix": "nas_Xy12AbC9", "scopes": ["files:read", "files:write"],
+ "created_at": "...", "expires_at": "...", "last_used_at": null, "last_used_ip": null,
+ "revoked_at": null, "active": true, "token": "nas_Xy12AbC9..."}
+```
+
+  `expires_in_days` omitted → the default lifetime; `0` → never expires (only when `NAS_API_TOKEN_MAX_LIFETIME_DAYS=0`). Errors: scope outside your permissions → 403 (`details.scopes`); unknown scope or lifetime above the maximum → 400; duplicate active name or more than `NAS_API_TOKEN_MAX_PER_USER` active tokens → 409.
+- `GET /tokens` (session or token) → the caller's tokens (metadata only, never the secret).
+- `DELETE /tokens/{id}` (session) → 204. Other users' ids → 404.
+- `GET /admin/tokens?user_id=` (`api_tokens:read`) → every user's tokens with `username`.
+- `DELETE /admin/tokens/{id}` (`api_tokens:write`) → 204.
+
+Failed bearer lookups are rate limited per client IP (`NAS_API_TOKEN_AUTH_MAX_FAILURES` within `NAS_API_TOKEN_AUTH_WINDOW_SECONDS`; then `429` with `Retry-After`). Audited under category `api_token`: `api_token.created`, `api_token.revoked`, `api_token.auth_failed` (failures inside the window; throttled attempts are not logged so they cannot flood the table).
+
+Public drop-folder uploads made with a bearer token are charged to that token's own quota (`token:<id>`, default `NAS_API_TOKEN_UPLOAD_QUOTA_BYTES`); an invalid token on the drop endpoint is a `401`, not a silent fallback to the IP quota.
+
+## Resumable uploads
+
+Chunked uploads that survive dropped connections. Works with sessions and tokens. Target `files` (a managed directory; needs `files:write` at every step) or `public` (the drop folder; charged to `token:<id>` or `user:<name>`).
+
+1. `POST /uploads` — body `{"target": "files", "root": "/srv/files", "path": "photos", "filename": "IMG_1.jpg", "size": 7340032, "overwrite": false, "sha256": "<optional hex>"}` or `{"target": "public", "filename": "IMG_1.jpg", "size": 7340032}` → 201 `{"id", "target", "filename", "offset": 0, "total_bytes", "chunk_max_bytes", "created_at", "expires_at"}` with `Location` and `Upload-Offset`. The destination, name, size caps, overwrite rule and (for `public`) remaining quota are checked here. At most `NAS_RESUMABLE_MAX_OPEN_PER_USER` open uploads (409).
+2. `PATCH /uploads/{id}` — headers `Upload-Offset: <n>` (must equal the server's offset, else 409 with `details.offset`) and `Content-Type: application/offset+octet-stream`; body = the next raw bytes, at most `chunk_max_bytes` and never past `size` (400, the chunk is rolled back). Returns the status with the new `Upload-Offset`. If the connection drops mid-chunk the bytes that arrived are kept.
+3. `HEAD /uploads/{id}` / `GET /uploads/{id}` — `Upload-Offset` and `Upload-Length` headers (plus JSON for GET): where to resume.
+4. `POST /uploads/{id}/complete` — optional body `{"sha256": "..."}` → `{"target": "files", "file": FileEntry}` or `{"target": "public", "public": PublicUploadResult}`. Incomplete → 409; checksum mismatch → 400 and the upload is discarded; a name that appeared meanwhile (without `overwrite`) → 409 and the bytes are kept; public quota exhausted → 413 and the upload is discarded (the authoritative quota check happens here, under the same row lock as single-shot uploads).
+5. `DELETE /uploads/{id}` → 204, discards the bytes.
+
+Upload ids are private to their owner (others get 404). Each `PATCH` slides the expiry (`NAS_RESUMABLE_UPLOAD_TTL_HOURS`); expired uploads are discarded opportunistically and by `POST /uploads/cleanup` (`files:write`, returns `{"expired_uploads", "pruned_changes"}`). Staging files are named `.nas-resumable-<id>.part`, hidden from listings and search, and not touched by the drop-folder cleanup. Audited: `upload.session_created`, `upload.session_completed`, `upload.session_aborted`, `upload.session_expired` (plus the usual `file.uploaded` / `public_upload.uploaded`).
+
+## Sync cursors (`files:read`)
+
+Every change the file manager makes (upload, overwrite, mkdir, rename, delete — including resumable completions) is journaled with a monotonically increasing id. Changes made outside the application (Samba, a shell) are **not** journaled; re-list periodically if those matter.
+
+- `GET /sync/cursor` → `{"cursor": "c42"}`. Take it **before** the initial listing.
+- `GET /sync/changes?root=/srv/files&cursor=c42&limit=500` →
+
+```json
+{"root": "/srv/files", "cursor": "c47", "has_more": false, "reset": false,
+ "changes": [{"id": 43, "kind": "renamed", "path": "docs/b.txt", "old_path": "docs/a.txt",
+              "is_dir": false, "size_bytes": null, "created_at": "..."}]}
+```
+
+  `kind` is `created`, `modified`, `deleted` or `renamed` (`old_path` set). A recursive delete is one `deleted` entry for the directory. Keep calling with the returned `cursor` while `has_more` is true. `reset: true` means the cursor predates the retained journal (`NAS_SYNC_CHANGE_RETENTION_DAYS`) or comes from another server: re-list the root and continue from the returned `cursor`. A malformed cursor → 400; an unknown root → 404.
+
+## Client discovery and downloads
+
+- `GET /info` (public) → `{"name", "version", "api_version": "1", "features": ["api_tokens", "resumable_uploads", "sync_cursors", "range_downloads"], "auth_schemes": ["session", "bearer"], "limits": {"max_upload_bytes", "resumable_chunk_max_bytes", "resumable_upload_ttl_hours", "sync_change_retention_days"}}`. Nothing sensitive (no paths, no counts).
+- `GET /files/content` honours `Range: bytes=a-b` (206 + `Content-Range`), so media can be streamed and interrupted downloads resumed.
+
 ## Planned
 
-
-API tokens, resumable transfers and sync cursors (6). Each phase will extend this document.
+Cloud and remote synchronization (7), media libraries (8), streaming (9). Each phase will extend this document.

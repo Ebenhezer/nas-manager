@@ -2,9 +2,10 @@
 
 A dedicated drop folder that clients may write to without an account
 (``public uploads``). It is *upload-only*: there is no public listing,
-download or search endpoint. Usage is accounted per uploader — an
-authenticated request counts against ``user:<username>``, an anonymous one
-against ``ip:<client address>`` — and enforced against a per-uploader quota.
+download or search endpoint. Usage is accounted per uploader — an API-token
+request counts against ``token:<id>`` (Phase 6), a session request against
+``user:<username>``, an anonymous one against ``ip:<client address>`` — and
+enforced against a per-uploader quota.
 
 Atomicity / concurrency
     The quota check and the file reservation live in the same database
@@ -55,11 +56,17 @@ _UPLOAD_TMP_PREFIX = ".nas-upload-"
 _DIR_HASH_LENGTH = 24
 _USER_PREFIX = "user:"
 _IP_PREFIX = "ip:"
+_TOKEN_PREFIX = "token:"  # noqa: S105 - a key namespace, not a credential
 
 
 def uploader_key_for_user(username: str) -> str:
     """Quota key for an authenticated uploader (a session-carrying client)."""
     return f"{_USER_PREFIX}{username}"
+
+
+def uploader_key_for_token(token_id: int) -> str:
+    """Quota key for an API-token client (Phase 6): one quota per token."""
+    return f"{_TOKEN_PREFIX}{token_id}"
 
 
 def uploader_key_for_ip(ip_address: str | None) -> str:
@@ -82,13 +89,18 @@ def uploader_dir(settings: Settings, uploader_key: str) -> Path:
     return settings.resolved_public_upload_dir / digest
 
 
+def _default_quota(settings: Settings, key: str) -> int:
+    """Token clients get their own default; sessions and IPs share the folder's."""
+    if key.startswith(_TOKEN_PREFIX):
+        return settings.api_token_upload_quota_bytes
+    return settings.public_upload_default_quota_bytes
+
+
 def _get_or_create_quota(session: Session, settings: Settings, key: str) -> PublicUploadQuota:
     row = session.get(PublicUploadQuota, key)
     if row is None:
         row = PublicUploadQuota(
-            uploader_key=key,
-            quota_bytes=settings.public_upload_default_quota_bytes,
-            used_bytes=0,
+            uploader_key=key, quota_bytes=_default_quota(settings, key), used_bytes=0
         )
         session.add(row)
         session.flush()
@@ -125,6 +137,27 @@ def _unique_path(directory: Path, name: str) -> Path:
         counter += 1
 
 
+def validate_upload_request(
+    session: Session, settings: Settings, *, uploader_key: str, filename: str
+) -> tuple[str, str]:
+    """Check the switch, key and filename; return ``(key, sanitized_name)``."""
+    key = validate_uploader_key(uploader_key)
+    if not public_uploads_enabled(session, settings):
+        raise ForbiddenError("Public uploads are currently disabled")
+    name = sanitize_entry_name(filename)
+    if len(name.encode("utf-8")) > MAX_FILENAME_LENGTH:
+        raise BadRequestError("Filename is too long")
+    return key, name
+
+
+def remaining_quota(session: Session, settings: Settings, uploader_key: str) -> int:
+    """Bytes the uploader may still add (advisory; not a reservation)."""
+    row = session.get(PublicUploadQuota, uploader_key)
+    if row is None:
+        return _default_quota(settings, uploader_key)
+    return max(0, row.quota_bytes - row.used_bytes)
+
+
 def upload(
     session: Session,
     settings: Settings,
@@ -142,13 +175,9 @@ def upload(
     record (see the module docstring); on any failure the reservation is
     rolled back and the temporary file removed.
     """
-    key = validate_uploader_key(uploader_key)
-    if not public_uploads_enabled(session, settings):
-        raise ForbiddenError("Public uploads are currently disabled")
-    name = sanitize_entry_name(filename)
-    if len(name.encode("utf-8")) > MAX_FILENAME_LENGTH:
-        raise BadRequestError("Filename is too long")
-
+    key, name = validate_upload_request(
+        session, settings, uploader_key=uploader_key, filename=filename
+    )
     directory = uploader_dir(settings, key)
     directory.mkdir(parents=True, exist_ok=True, mode=0o750)
     temporary = directory / f"{_UPLOAD_TMP_PREFIX}{uuid.uuid4().hex}.part"
@@ -167,7 +196,44 @@ def upload(
                         details={"max_file_bytes": cap},
                     )
                 out.write(chunk)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+    return commit_staged(
+        session,
+        settings,
+        uploader_key=key,
+        filename=name,
+        staged=temporary,
+        size=total,
+        ip_address=ip_address,
+        actor=actor,
+        context=context,
+    )
 
+
+def commit_staged(
+    session: Session,
+    settings: Settings,
+    *,
+    uploader_key: str,
+    filename: str,
+    staged: Path,
+    size: int,
+    ip_address: str | None = None,
+    actor: User | None = None,
+    context: dict[str, str | None] | None = None,
+) -> PublicUploadFile:
+    """Check + reserve quota and move a fully written temp file into place.
+
+    Shared by the single-shot and the resumable upload paths. ``staged`` must
+    live in the uploader's directory; it is removed on any failure.
+    """
+    key = uploader_key
+    name = filename
+    total = size
+    directory = staged.parent
+    try:
         # Quota check + reservation in one transaction. Touching the uploader
         # row with UPDATE takes the writer lock for this key (SQLite: the
         # single-writer WAL lock; PostgreSQL: the row lock), then refresh
@@ -217,7 +283,7 @@ def upload(
             )
 
         final = _unique_path(directory, name)
-        os.replace(temporary, final)
+        os.replace(staged, final)
         row = PublicUploadFile(
             uploader_key=key,
             filename=final.name,
@@ -249,7 +315,7 @@ def upload(
         session.commit()
         return row
     except Exception:
-        temporary.unlink(missing_ok=True)
+        staged.unlink(missing_ok=True)
         session.rollback()
         raise
 

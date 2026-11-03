@@ -79,6 +79,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         max_attempts=settings.login_ip_max_attempts,
         window_seconds=settings.login_ip_window_seconds,
     )
+    # Separate window for failed bearer-token lookups (Phase 6) so token
+    # guessing cannot burn the login allowance and vice versa.
+    app.state.token_throttle = IpLoginThrottle(
+        max_attempts=settings.api_token_auth_max_failures,
+        window_seconds=settings.api_token_auth_window_seconds,
+    )
 
     register_exception_handlers(app)
     # Last added middleware is outermost: RequestContextMiddleware must stay

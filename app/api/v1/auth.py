@@ -3,7 +3,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.orm import Session
 
-from app.api.v1.deps import CurrentUser, get_current_user, request_audit_context
+from app.api.v1.deps import (
+    CurrentUser,
+    get_current_user,
+    request_audit_context,
+    require_session_auth,
+)
 from app.core.config import Settings
 from app.core.errors import UnauthorizedError
 from app.db.dependencies import get_db
@@ -89,45 +94,52 @@ def login(
 def logout(
     request: Request,
     response: Response,
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_session_auth),
     db: Session = Depends(get_db),
 ) -> None:
-    auth_service.logout(db, current.session, actor=current.user)
+    if current.session is not None:  # always true behind require_session_auth
+        auth_service.logout(db, current.session, actor=current.user)
     _clear_auth_cookies(response, request)
     response.status_code = 204
 
 
-@router.get("/me", response_model=MeResponse)
-def me(current: CurrentUser = Depends(get_current_user)) -> MeResponse:
+def _me_response(current: CurrentUser) -> MeResponse:
     user = current.user
+    token = current.token
     return MeResponse(
         user=SessionUser(id=user.id, username=user.username, display_name=user.display_name),
         roles=sorted(role.name for role in user.roles),
         groups=[GroupSummary.model_validate(g) for g in user.groups],
         permissions=sorted(current.permissions),
-        session_expires_at=current.session.expires_at.isoformat(),
+        session_expires_at=(
+            current.session.expires_at.isoformat() if current.session is not None else None
+        ),
+        auth_method=current.auth_method,
+        token_name=token.name if token is not None else None,
+        token_expires_at=(
+            token.expires_at.isoformat() if token is not None and token.expires_at else None
+        ),
     )
+
+
+@router.get("/me", response_model=MeResponse)
+def me(current: CurrentUser = Depends(get_current_user)) -> MeResponse:
+    return _me_response(current)
 
 
 @router.post("/change-password", response_model=MeResponse)
 def change_own_password(
     payload: ChangePasswordRequest,
     request: Request,
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_session_auth),
     db: Session = Depends(get_db),
 ) -> MeResponse:
     settings: Settings = request.app.state.settings
-    user = change_password(
+    change_password(
         db,
         current.user,
         current_password=payload.current_password,
         new_password=payload.new_password,
         settings=settings,
     )
-    return MeResponse(
-        user=SessionUser(id=user.id, username=user.username, display_name=user.display_name),
-        roles=sorted(role.name for role in user.roles),
-        groups=[GroupSummary.model_validate(g) for g in user.groups],
-        permissions=sorted(current.permissions),
-        session_expires_at=current.session.expires_at.isoformat(),
-    )
+    return _me_response(current)

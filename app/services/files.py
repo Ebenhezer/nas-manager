@@ -26,11 +26,19 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.models import User
+from app.models.file_change import (
+    CHANGE_CREATED,
+    CHANGE_DELETED,
+    CHANGE_MODIFIED,
+    CHANGE_RENAMED,
+)
 from app.schemas.files import FileEntry
-from app.services import audit
+from app.services import audit, sync
 
 _CHUNK_SIZE = 1024 * 1024
 _UPLOAD_TMP_PREFIX = ".nas-upload-"
+RESUMABLE_TMP_PREFIX = ".nas-resumable-"
+_TMP_PREFIXES = (_UPLOAD_TMP_PREFIX, RESUMABLE_TMP_PREFIX)
 
 
 class _RequestContext(TypedDict, total=False):
@@ -110,7 +118,11 @@ def list_dir(
     target = resolve_in_root(root, rel_path)
     if not target.is_dir():
         raise BadRequestError("Not a directory", details={"path": rel_path})
-    entries = [_entry_for(child, root) for child in target.iterdir()]
+    entries = [
+        _entry_for(child, root)
+        for child in target.iterdir()
+        if not child.name.startswith(_TMP_PREFIXES)
+    ]
     entries.sort(key=lambda entry: (not entry.is_dir, entry.name.lower()))
     return str(root), rel_path, entries
 
@@ -143,18 +155,10 @@ def download_path(
     return target
 
 
-def upload(
-    session: Session,
-    settings: Settings,
-    *,
-    root_str: str,
-    rel_dir: str,
-    filename: str,
-    source: BinaryIO,
-    overwrite: bool,
-    actor: User,
-    context: dict[str, str | None] | None = None,
-) -> FileEntry:
+def prepare_upload_target(
+    settings: Settings, *, root_str: str, rel_dir: str, filename: str, overwrite: bool
+) -> tuple[Path, Path]:
+    """Validate an upload destination and return ``(root, target)``."""
     root = resolve_root(settings, root_str)
     directory = resolve_in_root(root, rel_dir)
     if not directory.is_dir():
@@ -167,8 +171,25 @@ def upload(
         )
     if target.exists() and target.is_dir():
         raise BadRequestError("Cannot overwrite a directory with a file")
+    return root, target
 
-    temporary = directory / f"{_UPLOAD_TMP_PREFIX}{uuid.uuid4().hex}.part"
+
+def upload(
+    session: Session,
+    settings: Settings,
+    *,
+    root_str: str,
+    rel_dir: str,
+    filename: str,
+    source: BinaryIO,
+    overwrite: bool,
+    actor: User,
+    context: dict[str, str | None] | None = None,
+) -> FileEntry:
+    root, target = prepare_upload_target(
+        settings, root_str=root_str, rel_dir=rel_dir, filename=filename, overwrite=overwrite
+    )
+    temporary = target.parent / f"{_UPLOAD_TMP_PREFIX}{uuid.uuid4().hex}.part"
     total = 0
     try:
         with temporary.open("wb") as out:
@@ -183,12 +204,53 @@ def upload(
                         details={"max_bytes": settings.max_upload_bytes},
                     )
                 out.write(chunk)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+    return commit_staged(
+        session,
+        root=root,
+        target=target,
+        staged=temporary,
+        size=total,
+        overwrite=overwrite,
+        actor=actor,
+        context=context,
+    )
+
+
+def commit_staged(
+    session: Session,
+    *,
+    root: Path,
+    target: Path,
+    staged: Path,
+    size: int,
+    overwrite: bool,
+    actor: User,
+    context: dict[str, str | None] | None = None,
+) -> FileEntry:
+    """Move a fully written temp file into place, then audit and journal it.
+
+    Shared by the single-shot and the resumable upload paths. The overwrite
+    rule and the jail are re-checked here because time has passed since the
+    destination was validated; on any failure the staged file is removed.
+    """
+    try:
+        existed = target.exists()
+        if existed and not overwrite:
+            raise ConflictError(
+                "A file or directory with that name already exists",
+                details={"name": target.name},
+            )
+        if existed and target.is_dir():
+            raise BadRequestError("Cannot overwrite a directory with a file")
         # Defence in depth: re-check the final target stays inside the root.
         if not target.resolve(strict=False).is_relative_to(root.resolve(strict=False)):
             raise BadRequestError("Path escapes the managed root")
-        os.replace(temporary, target)
+        os.replace(staged, target)
     except Exception:
-        temporary.unlink(missing_ok=True)
+        staged.unlink(missing_ok=True)
         raise
 
     rel_path = str(target.relative_to(root))
@@ -199,9 +261,17 @@ def upload(
         actor=actor,
         target_type="file",
         target_id=rel_path,
-        details={"root": str(root), "path": rel_path, "size": total, "overwrite": overwrite},
+        details={"root": str(root), "path": rel_path, "size": size, "overwrite": overwrite},
         **_audit_ctx(context),
         commit=False,
+    )
+    sync.record_change(
+        session,
+        root=str(root),
+        path=rel_path,
+        kind=CHANGE_MODIFIED if existed else CHANGE_CREATED,
+        size_bytes=size,
+        actor=actor,
     )
     session.commit()
     return _entry_for(target, root)
@@ -240,6 +310,9 @@ def mkdir(
         **_audit_ctx(context),
         commit=False,
     )
+    sync.record_change(
+        session, root=str(root), path=rel_path_new, kind=CHANGE_CREATED, is_dir=True, actor=actor
+    )
     session.commit()
     return _entry_for(target, root)
 
@@ -266,8 +339,10 @@ def rename(
         raise ConflictError(
             "A file or directory with that name already exists", details={"name": safe}
         )
+    is_dir = source.is_dir() and not source.is_symlink()
     source.rename(target)
     rel_path_new = str(target.relative_to(root))
+    rel_path_old = str(source.relative_to(root))
     audit.record_audit_event(
         session,
         event=audit.FILE_RENAMED,
@@ -278,6 +353,15 @@ def rename(
         details={"root": str(root), "from": rel_path, "to": rel_path_new},
         **_audit_ctx(context),
         commit=False,
+    )
+    sync.record_change(
+        session,
+        root=str(root),
+        path=rel_path_new,
+        old_path=rel_path_old,
+        kind=CHANGE_RENAMED,
+        is_dir=is_dir,
+        actor=actor,
     )
     session.commit()
     return _entry_for(target, root)
@@ -323,6 +407,14 @@ def delete(
         **_audit_ctx(context),
         commit=False,
     )
+    sync.record_change(
+        session,
+        root=str(root),
+        path=str(target.relative_to(root.resolve(strict=False))),
+        kind=CHANGE_DELETED,
+        is_dir=is_dir,
+        actor=actor,
+    )
     session.commit()
 
 
@@ -342,7 +434,7 @@ def search(
     matches: list[FileEntry] = []
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         for name in dirnames + filenames:
-            if name.startswith(_UPLOAD_TMP_PREFIX):
+            if name.startswith(_TMP_PREFIXES):
                 continue
             if needle in name.lower():
                 matches.append(_entry_for(Path(dirpath) / name, root))

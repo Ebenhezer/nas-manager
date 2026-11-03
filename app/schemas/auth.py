@@ -37,3 +37,6 @@ class MeResponse(BaseModel):
     groups: list[GroupSummary]
     permissions: list[str]
     session_expires_at: str | None = None
+    auth_method: str = "session"
+    token_name: str | None = None
+    token_expires_at: str | None = None

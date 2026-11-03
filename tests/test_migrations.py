@@ -40,6 +40,9 @@ def test_upgrade_creates_schema_and_reaches_head(settings: Settings) -> None:
             "samba_shares",
             "public_upload_quotas",
             "public_upload_files",
+            "api_tokens",
+            "upload_sessions",
+            "file_changes",
         } <= tables
     finally:
         db.dispose()
@@ -100,7 +103,7 @@ def test_current_revision_reports_diverged_rows(migrated_settings: Settings) -> 
         with db.engine.begin() as connection:
             connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('zzz')"))
         current = get_current_revision(db.engine)
-        assert current == "0005,zzz"
+        assert current == "0006,zzz"
         assert current != get_head_revision(migrated_settings)
     finally:
         db.dispose()
@@ -140,4 +143,4 @@ def test_alembic_cli_runs_from_project_root_and_creates_state_dir(
         timeout=60,
         check=False,
     )
-    assert "0005" in current.stdout + current.stderr
+    assert "0006" in current.stdout + current.stderr

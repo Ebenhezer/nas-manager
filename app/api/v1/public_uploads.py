@@ -10,9 +10,10 @@ Two routers share the ``/public/uploads`` prefix:
   per-uploader status and quotas, file records, single-file deletion and
   cleanup.
 
-An upload counts against the authenticated user's quota (``user:<username>``)
-when the request carries a valid session, otherwise against the client IP
-(``ip:<address>``).
+An upload counts against the API token's own quota (``token:<id>``) when the
+request carries a bearer token, against the authenticated user's quota
+(``user:<username>``) when it carries a valid session, otherwise against the
+client IP (``ip:<address>``).
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.api.v1.deps import (
     CurrentUser,
+    bearer_token,
     get_current_user,
     request_audit_context,
     require_permission,
@@ -49,15 +51,21 @@ router_admin = APIRouter(prefix="/public/uploads", tags=["public-uploads-admin"]
 
 
 def _identity(request: Request, db: Session) -> tuple[str, User | None]:
-    """``(uploader_key, actor)`` for this request: the identified session user
-    when logged in, otherwise the client IP address. Invalid/expired sessions
-    fall back to the IP key rather than failing the public upload."""
+    """``(uploader_key, actor)`` for this request: the API token or the
+    session user when identified, otherwise the client IP address.
+    Invalid/expired sessions fall back to the IP key rather than failing the
+    public upload; an invalid bearer token is an error (401), because a
+    client that sent one expects to be charged to that token's quota."""
     try:
         current = get_current_user(request, db)
     except UnauthorizedError:
+        if bearer_token(request) is not None:
+            raise
         current = None
     if current is not None:
         user = current.user
+        if current.token is not None:
+            return public_uploads.uploader_key_for_token(current.token.id), user
         return public_uploads.uploader_key_for_user(user.username), user
     client = request.client
     return public_uploads.uploader_key_for_ip(client.host if client is not None else None), None

@@ -13,6 +13,7 @@ from app.core.errors import BadRequestError, ConflictError, NotFoundError
 from app.core.permissions import DEFAULT_USER_ROLE
 from app.models import Role, User
 from app.services import audit
+from app.services.api_tokens import revoke_all_user_tokens
 from app.services.auth_service import revoke_all_user_sessions
 from app.services.passwords import (
     hash_password,
@@ -176,6 +177,7 @@ def set_user_active(session: Session, user: User, *, active: bool, actor: User) 
     user.is_active = active
     if not active:
         revoke_all_user_sessions(session, user)
+        revoke_all_user_tokens(session, user)
     audit.record_audit_event(
         session,
         event=audit.USER_ACTIVE_STATE_CHANGED,
@@ -311,6 +313,7 @@ def reset_password(
         raise BadRequestError(str(exc)) from exc
     user.password_hash = hash_password(new_password, settings)
     revoke_all_user_sessions(session, user)
+    revoke_all_user_tokens(session, user)
     audit.record_audit_event(
         session,
         event=audit.USER_PASSWORD_RESET,
