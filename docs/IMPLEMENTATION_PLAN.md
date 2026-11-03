@@ -18,8 +18,8 @@ Status legend: **Done** (implemented and verified), **Next**, **Planned**.
 | 10 | System monitoring and alerting | **Done** |
 | 11 | Backup and restore | **Done** |
 | 12 | Configuration export and import | **Done** |
-| 13 | Syslog and comprehensive auditing | **Next** |
-| 14 | Security hardening, deployment testing, documentation | Planned |
+| 13 | Syslog and comprehensive auditing | **Done** |
+| 14 | Security hardening, deployment testing, documentation | **Next** |
 
 ## Phase 1: completed
 
@@ -215,6 +215,15 @@ Delivered:
 56. **Imports never delete accounts or data-bearing objects.** `replace` deletes only plain configuration; users, roles, connections, repositories and libraries must be removed deliberately in the UI. Missing secrets downgrade gracefully (inactive users, credentials to re-enter, skipped repositories) instead of failing.
 57. **`smb.conf` is not written by an import.** The deviation from the plan (apply Samba after commit) keeps one write path for `smb.conf`, the Samba page, with `testparm`, a backup and the helper. The import result reports `samba_apply_required`.
 
+58. **Audit events are forwarded from the table, not from the log stream.** The worker sends each destination the events above its cursor and moves the cursor after every accepted batch, so an outage delays events instead of losing them. Application logs, which have no table, are forwarded best effort through a bounded in-memory queue that never blocks a request.
+59. **Syslog destinations live in the database.** They are managed on the Logging page like alert channels; every change bumps a version that the worker polls, so nobody has to edit the environment file or restart. They carry no secrets, so API tokens with `system:write` may manage them.
+60. **TLS by default, plaintext by confirmation.** TLS always verifies the collector (system store or a per-destination CA); UDP/TCP use the Phase 7 `confirmation_required` pattern.
+61. **A hash chain sealed by the worker, not at insert time.** Chaining inside each request would serialise every writer on the previous hash. The worker seals in id order instead; an unsealed event below the sealed head is reported. The canonical form leaves out `actor_user_id` (`ON DELETE SET NULL`). Anchor and head in `app_settings` make pruning and tail truncation verifiable.
+62. **Retention only removes what is safe to remove.** Pruning deletes a contiguous prefix of events that are past retention, sealed and forwarded to every enabled destination, and always keeps the newest event, because SQLite reuses the ids of deleted rows at the end of a table. The default retention is 90 days (user decision).
+63. **Logs only see committed events.** Audit log lines are emitted from the session's `after_commit` hook, so a refused or rolled-back action never appears in journald or the log file.
+64. **Native journald without new dependencies.** The journal's datagram protocol is a few lines of stdlib code. With `NAS_LOG_JOURNALD=auto` the console copy is dropped when the native handler is active, so lines are not duplicated.
+65. **Coverage is a test, not a convention.** `tests/test_audit_coverage.py` lists every state-changing route with its event(s) or an exemption reason, so a new unaudited route fails the suite. The sweep found one gap, Google Drive `oauth/start`, now audited as `remote.oauth_started`.
+
 ## Known limitations
 
 - The management UI (including the gallery and video player) was exercised via TestClient and curl, not a real browser.
@@ -223,6 +232,7 @@ Delivered:
 - The per-IP login limiter is in-process (single process; resets on restart). The account lockout is persistent in the database.
 - The bearer-failure throttle and the per-upload resumable lock are in-process; a multi-process deployment needs shared state for both.
 - The sync journal records only changes made through the application; edits over Samba or directly on disk are not journaled (clients should re-list periodically).
+- Auditing and syslog (Phase 13): plain syslog has no delivery acknowledgement (RELP is not supported), so a collector that crashes mid-batch can lose that batch; mutual-TLS client certificates are not supported; application-log forwarding is best effort and drops records when its queue is full (counted on the Logging page); a destination that keeps failing holds back audit pruning; the hash chain is tamper-evident, not tamper-proof (a database writer can recompute it); on PostgreSQL, transactions that commit out of id order can show up as "unsealed event inside the sealed range"; audit events written while the worker is down are sealed and forwarded when it starts again; `POST /media/sync/lookup` may create a user's personal library row without an audit event.
 - Configuration import (Phase 12): only the most recent import can be rolled back, and changes made after it to the same objects are overwritten by the rollback; `replace` mode never deletes users, roles, connections, repositories or libraries; documents from other app versions are refused (format version 1 only); the import does not apply `smb.conf` (use the Samba page); personal media libraries and albums are not part of the configuration.
 - Backups (Phase 11): SQLite only for system-state jobs; no bandwidth limit, partial-file resume or content compression; no filesystem snapshots (files changing during a backup may be captured mid-write); changing a passphrase in the app does not re-key the repository; no built-in alert rule for verify failures (audited and shown on the Backups page); one backup-related run at a time per worker; snapshots of deleted jobs are never pruned automatically; browsing a snapshot downloads and decrypts its manifest in the web process (capped listing).
 - Monitoring (Phase 10): a stopped worker cannot notify, including about itself; the UI shows it. History is sampled, by default once a minute, and kept 7 days, so there is no per-second resolution or long-term trending. Disk usage is sampled for the data directory and the managed file roots only (other mounts appear in Disks). Process CPU % is measured between page refreshes. SMART polling needs the helper. Only email and webhook channels exist (no SMS or push app). Alert rules are global, with no per-user subscriptions or quiet hours. Deleting a channel drops notifications still queued for it.
@@ -530,3 +540,33 @@ Delivered:
 - **Cross-version imports** are untested (only format version 1 exists).
 - **Imports into PostgreSQL** are untested.
 - **Large documents** (thousands of users) are untested; they are capped at 10,000 objects per section.
+
+## Phase 13: completed
+
+Delivered:
+
+- **Searchable audit log:** free text (`q`, also over details, wildcards escaped), time range, target, request id and IP filters; facets; streamed CSV/JSON Lines export (formula-safe CSV, capped, audited); a details modal and export buttons on the Audit page.
+- **Comprehensive auditing:** `auth.permission_denied` (throttled), `system.started`/`stopped` for web and worker, `remote.oauth_started`, and a route-inventory test covering all 102 state-changing routes. A quota rejection during resumable completion no longer also records `upload.session_completed`.
+- **Hash chain** (`app/services/audit_chain.py`): worker sealing, verification (API, Logging page and a daily worker check that records `audit.chain_broken`), and retention pruning (`NAS_AUDIT_RETENTION_DAYS`, default 90) that waits for sealing and forwarding.
+- **Remote syslog** (`app/services/syslog/`): RFC 5424/3164 over UDP, TCP or verified TLS. Destinations are managed on a new **Logging** page and through `/api/v1/syslog/*`. The worker forwards audit events from a cursor with backoff and transition-only audit events. Every process forwards application logs best effort.
+- **Local logging:** native journald output (`NAS_LOG_JOURNALD`, structured `NAS_*` fields, per-process `NAS_SYSLOG_IDENTIFIER`), daily rotation (`NAS_LOG_ROTATION`) and gzip compression (`NAS_LOG_COMPRESS`).
+- **Migration `0013`:** `syslog_destinations`, `audit_events.chain_hash` and an `actor_username` index; no new permissions.
+- **Docs:** API, architecture, security, installation (journalctl queries, rsyslog TLS receiver, retention upgrade note) and the master plan.
+
+### Verification (executed in this workspace, Python 3.12.3, Ubuntu 24.04 on WSL2)
+
+| Check | Result |
+|-------|--------|
+| `pytest` | 820 passed, 1 skipped (739 after Phase 12; +81 in `test_syslog.py`, `test_audit_chain.py`, `test_audit_search.py`, `test_audit_coverage.py`, `test_log_outputs.py`, plus additions to `test_worker.py`, `test_migrations.py`, `test_dashboard.py`, `test_resumable_uploads.py`). The worker and syslog modules were re-run (53 passed) after the last fix. The skip is the unreadable-file test, which cannot work as root. |
+| `ruff check` / `ruff format --check` / `mypy` (strict, 223 source files) | clean |
+| Migrations | head `0013`; downgrade to `0012` and re-upgrade keeps existing audit rows; drift check passes; `alembic upgrade` via the CLI on a fresh directory |
+| Live run (`python -m app` + `python -m app.worker`, scratch data dir, loopback TCP/UDP collector) | 26/26 checks: plaintext confirmation, backfill, failures-only RFC 3164 over UDP, the test message, search and both exports, worker sealing, verify passes, then a raw SQL edit is detected. Collector stopped → destination failing with a backlog → restarted → backlog plus `forward_failed`/`forward_recovered` delivered. Application logs (INFO) forwarded from both processes under their own identifiers; `app.audit` records not duplicated as logs. The worker's `system.stopped` reached the collector after a fix found here: the final pass now ignores the stop flag. No ERROR lines or tracebacks in either log. |
+| systemd | `systemd-analyze verify` on the worker unit: no directive errors |
+
+### Not verified
+
+- **No real browser:** the Logging page and the new Audit page were checked over HTTP only (rendering, element ids, no inline code). The JavaScript was not syntax-checked (no Node runtime).
+- **No real collector software:** delivery was tested against loopback Python receivers (UDP, TCP, and TLS with a generated CA), not rsyslog, syslog-ng or Graylog. The rsyslog example in INSTALLATION.md is untested.
+- **journald:** the native protocol was tested against a bound datagram socket. Entries were not checked in a real journal under the systemd units.
+- The Postman collection planned for this phase was not produced: `docs/postman/` is empty in this workspace (the earlier phases' collections are missing too).
+- PostgreSQL is still not exercised.

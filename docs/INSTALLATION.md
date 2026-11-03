@@ -184,6 +184,33 @@ curl -s http://127.0.0.1:8080/api/v1/health
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/login   # 200
 ```
 
+### Logging, auditing and remote syslog (Phase 13)
+
+- **journald.** Under systemd, `NAS_LOG_JOURNALD=auto` (default) writes native journal entries and stops the duplicate console copy. Query them by identifier and structured field:
+
+  ```bash
+  journalctl -t nas-manager -t nas-manager-worker -n 50
+  journalctl SYSLOG_IDENTIFIER=nas-manager NAS_AUDIT_EVENT=auth.login.failure -o json-pretty
+  journalctl -t nas-manager NAS_AUDIT_OUTCOME=failure --since today
+  ```
+
+- **Log files** in `NAS_LOG_DIR` rotate by size (`NAS_LOG_MAX_BYTES`, `NAS_LOG_BACKUP_COUNT`) or daily at midnight UTC (`NAS_LOG_ROTATION=daily`, keeping `NAS_LOG_BACKUP_COUNT` days); `NAS_LOG_COMPRESS=true` gzips rotated files. Do not add a logrotate rule for these files as well.
+- **Remote syslog** is configured on the **Logging** page (or `/api/v1/syslog/destinations`). The worker must be running: it seals audit events into the hash chain and forwards them. A minimal rsyslog TLS receiver on the collector:
+
+  ```
+  # /etc/rsyslog.d/10-nas-manager.conf on the collector (needs rsyslog-gnutls)
+  global(DefaultNetstreamDriver="gtls"
+         DefaultNetstreamDriverCAFile="/etc/ssl/nas/ca.pem"
+         DefaultNetstreamDriverCertFile="/etc/ssl/nas/collector.pem"
+         DefaultNetstreamDriverKeyFile="/etc/ssl/nas/collector.key")
+  module(load="imtcp" StreamDriver.Name="gtls" StreamDriver.Mode="1" StreamDriver.AuthMode="anon")
+  input(type="imtcp" port="6514")
+  if $programname startswith "nas-manager" then /var/log/nas-manager-remote.log
+  ```
+
+  Then add a destination with protocol TLS, the collector's host name (it must match its certificate) and, for a private CA, the CA certificate. Use **Test** to check the connection; the backlog column should drop to 0 within one worker tick.
+- **Retention.** Audit events are kept `NAS_AUDIT_RETENTION_DAYS` (default **90**; `0` keeps them forever). On upgrading to Phase 13, the worker's first hourly prune removes older events once they are sealed and forwarded to every enabled destination. Export them first (Audit page → Export) if you need them, or set the retention before starting the worker.
+
 ### Troubleshooting
 
 The unit applies strict sandboxing (`SystemCallFilter`, `MemoryDenyWriteExecute`, `ProtectSystem=strict`) that was validated with `systemd-analyze` but **not run under a live systemd**. ffmpeg/ffprobe under these sandboxes (web and worker units) is likewise unverified on a real host: if probing or transcoding fails only under systemd, check `journalctl` for `SIGSYS`/`mprotect` errors and the media status card's last transcode error. If the service exits with `SIGSYS`, an `mprotect`/`mmap` error or a "read-only file system" error in `journalctl -u nas-manager`, relax the corresponding directive with a drop-in (`systemctl edit nas-manager`) and report which one was needed.
@@ -194,6 +221,7 @@ The unit applies strict sandboxing (`SystemCallFilter`, `MemoryDenyWriteExecute`
 2. Replace application files, reinstall `requirements.txt`.
 3. `sudo systemctl restart nas-manager` (migrations apply automatically), then `sudo systemctl restart nas-manager-worker` if the sync worker is installed.
 4. After upgrading to Phase 9 with ffmpeg installed, videos indexed earlier are probed on their library's next scan (or press **Rescan**).
+5. Phase 13 introduces a 90-day audit retention (see above): set `NAS_AUDIT_RETENTION_DAYS=0` before restarting the worker to keep the full history.
 
 ## Dependency pinning
 

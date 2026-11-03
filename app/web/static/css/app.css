@@ -310,3 +310,8 @@ body.app-page {
   width: 100%;
   height: 60px;
 }
+
+/* Audit log rows open the event details (Phase 13). */
+.cursor-pointer {
+  cursor: pointer;
+}

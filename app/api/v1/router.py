@@ -22,6 +22,7 @@ from app.api.v1 import (
     samba,
     settings,
     sync,
+    syslog,
     system,
     uploads,
     users,
@@ -63,3 +64,4 @@ api_router.include_router(backups.jobs_router)
 api_router.include_router(backups.runs_router)
 api_router.include_router(backups.snapshots_router)
 api_router.include_router(config_transfer.router)
+api_router.include_router(syslog.router)

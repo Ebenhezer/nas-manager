@@ -29,6 +29,8 @@ FEATURES = [
     "alerting",
     "backup",
     "config_transfer",
+    "syslog",
+    "audit_search",
 ]
 
 

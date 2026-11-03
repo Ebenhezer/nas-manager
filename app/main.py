@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm import Session
 
 from app import __version__
+from app.api.v1.deps import DenialThrottle
 from app.api.v1.router import api_router
 from app.core.config import Settings, get_settings
 from app.core.csrf import CSRFProtectMiddleware
@@ -18,12 +21,26 @@ from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware
 from app.db.migrations import get_current_revision, get_head_revision, upgrade_to_head
 from app.db.session import Database, redact_url
+from app.services import audit
 from app.services.monitoring import prime_cpu_counter
 from app.services.settings_service import ensure_instance_id
+from app.services.syslog.log_handler import reload_log_forwarding
 from app.services.throttle import IpLoginThrottle
 from app.web import routes as web_routes
 
 logger = logging.getLogger(__name__)
+
+
+def _lifecycle_event(session: Session, event: str, settings: Settings) -> None:
+    audit.record_audit_event(
+        session,
+        event=event,
+        category=audit.CATEGORY_SYSTEM,
+        actor_username="system",
+        target_type="process",
+        target_id=settings.syslog_identifier,
+        details={"version": __version__, "pid": os.getpid()},
+    )
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -51,9 +68,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             upgrade_to_head(settings)
 
         head = get_head_revision(settings)
-        if get_current_revision(db.engine) == head:
+        schema_current = get_current_revision(db.engine) == head
+        if schema_current:
             with db.session_factory() as session:
                 app.state.instance_id = ensure_instance_id(session)
+                reload_log_forwarding(session)
+                _lifecycle_event(session, audit.SYSTEM_STARTED, settings)
         else:
             app.state.instance_id = None
             logger.warning("database schema is not up to date; run: alembic upgrade head")
@@ -62,6 +82,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            if schema_current:
+                try:
+                    with db.session_factory() as session:
+                        _lifecycle_event(session, audit.SYSTEM_STOPPED, settings)
+                except Exception:
+                    logger.exception("could not record the shutdown audit event")
             db.dispose()
             logger.info("stopped")
 
@@ -81,6 +107,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     # Separate window for failed bearer-token lookups (Phase 6) so token
     # guessing cannot burn the login allowance and vice versa.
+    app.state.denial_throttle = DenialThrottle()
     app.state.token_throttle = IpLoginThrottle(
         max_attempts=settings.api_token_auth_max_failures,
         window_seconds=settings.api_token_auth_window_seconds,

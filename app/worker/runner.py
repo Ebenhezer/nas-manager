@@ -20,8 +20,13 @@ under the same unprivileged account as the web application. Each tick it:
 8. runs backup, verify, prune and restore runs (Phase 11) one at a time
    on their own single-thread pool, so a long backup never takes a sync
    slot, and queues scheduled backups, and
-9. occasionally prunes old run history, the media journal, orphaned
-   thumbnail cache files, old metric samples and resolved alerts.
+9. seals new audit events into the hash chain and forwards them to the
+   remote syslog destinations (Phase 13) on their own single-thread pool,
+   verifies the chain once a day and reloads application-log forwarding
+   when the destinations change, and
+10. occasionally prunes old run history, the media journal, orphaned
+    thumbnail cache files, old metric samples, resolved alerts and audit
+    events past their retention.
 
 On SIGTERM/SIGINT it stops claiming, asks running jobs to stop after their
 current file and waits for them.
@@ -39,12 +44,13 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from app import __version__
 from app.core.config import Settings
 from app.core.secrets import CredentialCipher
 from app.db.base import utcnow_naive
 from app.db.session import Database
 from app.models import BackupRun, MediaLibrary, MediaTranscode, SyncRun
-from app.services import remote_sync
+from app.services import audit, audit_chain, remote_sync
 from app.services.backup import jobs as backup_jobs
 from app.services.media import jobs as media_jobs
 from app.services.media import transcode
@@ -52,10 +58,14 @@ from app.services.monitoring import alerts as monitor_alerts
 from app.services.monitoring import checks as monitor_checks
 from app.services.monitoring import notify as monitor_notify
 from app.services.monitoring import samples as monitor_samples
+from app.services.syslog import destinations as syslog_destinations
+from app.services.syslog import forwarder as syslog_forwarder
+from app.services.syslog.log_handler import reload_log_forwarding
 
 logger = logging.getLogger(__name__)
 
 _PRUNE_INTERVAL_SECONDS = 3600
+_AUDIT_VERIFY_INTERVAL_SECONDS = 24 * 3600
 
 
 class Worker:
@@ -79,11 +89,15 @@ class Worker:
         self.notify_future: Future[None] | None = None
         self.backup_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="backup")
         self.backup_future: Future[None] | None = None
+        self.audit_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="audit")
+        self.audit_future: Future[None] | None = None
+        self._syslog_version: str | None = None
         # Monotonic deadlines; 0 means "due on the first tick".
         self._next_sample = 0.0
         self._next_check = 0.0
         self._next_smart = 0.0
         self._last_prune = 0.0
+        self._next_verify = 0.0
 
     def tick(self) -> None:
         """One scheduling pass (also called directly by tests)."""
@@ -111,6 +125,7 @@ class Worker:
             self._transcode_tick(session, now)
             self._monitor_tick(session, now)
             self._backup_tick(session, now)
+            self._audit_tick(session)
             if time.monotonic() - self._last_prune >= _PRUNE_INTERVAL_SECONDS:
                 self._last_prune = time.monotonic()
                 pruned = remote_sync.prune_runs(session, self.settings)
@@ -129,6 +144,36 @@ class Worker:
                         "pruned metric samples and resolved alerts",
                         extra={"samples": samples_pruned, "alerts": alerts_pruned},
                     )
+                audit_pruned = audit_chain.prune(session, self.settings)
+                if audit_pruned:
+                    logger.info("pruned expired audit events", extra={"count": audit_pruned})
+
+    def _audit_tick(self, session: Session) -> None:
+        version = syslog_destinations.config_version(session)
+        if version != self._syslog_version:
+            self._syslog_version = version
+            reload_log_forwarding(session)
+        if self.audit_future is None or self.audit_future.done():
+            verify = time.monotonic() >= self._next_verify
+            if verify:
+                self._next_verify = time.monotonic() + _AUDIT_VERIFY_INTERVAL_SECONDS
+            self.audit_future = self.audit_pool.submit(self._audit, verify=verify)
+
+    def _audit(self, *, verify: bool, final: bool = False) -> None:
+        with self.db.session_factory() as session:
+            sealed = audit_chain.seal(session)
+            # The final pass at shutdown runs after the stop event is set and
+            # must still send what is pending.
+            stop = None if final else self.stop
+            result = syslog_forwarder.forward_due(session, self.settings, stop=stop)
+            if sealed or result["sent"] or result["failed"]:
+                logger.debug("audit pass", extra={"sealed": sealed, **result})
+            if verify:
+                verified = audit_chain.scheduled_verify(session)
+                logger.info(
+                    "audit chain verified",
+                    extra={"ok": verified.ok, "checked": verified.checked},
+                )
 
     def _media_tick(self, session: Session, now: datetime) -> None:
         lease = self.settings.media_scan_lease_seconds
@@ -316,9 +361,27 @@ class Worker:
             self.notify_future.result()
         if self.backup_future is not None:
             self.backup_future.result()
+        if self.audit_future is not None:
+            self.audit_future.result()
+
+    def _lifecycle_event(self, event: str) -> None:
+        try:
+            with self.db.session_factory() as session:
+                audit.record_audit_event(
+                    session,
+                    event=event,
+                    category=audit.CATEGORY_SYSTEM,
+                    actor_username="system",
+                    target_type="process",
+                    target_id=self.settings.syslog_identifier,
+                    details={"version": __version__, "pid": os.getpid(), "owner": self.owner},
+                )
+        except Exception:
+            logger.exception("could not record the worker lifecycle audit event")
 
     def run_forever(self) -> None:
         logger.info("sync worker started", extra={"owner": self.owner})
+        self._lifecycle_event(audit.SYSTEM_STARTED)
         while not self.stop.is_set():
             try:
                 self.tick()
@@ -332,4 +395,11 @@ class Worker:
         self.monitor_pool.shutdown(wait=True)
         self.notify_pool.shutdown(wait=True)
         self.backup_pool.shutdown(wait=True)
+        self.audit_pool.shutdown(wait=True)
+        # One last pass so the shutdown event is sealed and forwarded too.
+        self._lifecycle_event(audit.SYSTEM_STOPPED)
+        try:
+            self._audit(verify=False, final=True)
+        except Exception:
+            logger.exception("final audit pass failed")
         logger.info("sync worker stopped")

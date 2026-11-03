@@ -69,6 +69,18 @@ class Settings(BaseSettings):
     )
     log_max_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
     log_backup_count: int = Field(default=5, ge=0, le=100)
+    # Phase 13: "daily" rotates at midnight UTC and keeps log_backup_count
+    # days; compression gzips rotated files.
+    log_rotation: Literal["size", "daily"] = "size"
+    log_compress: bool = False
+    # Native journald output. "auto" switches it on when systemd connected
+    # stdout to the journal (JOURNAL_STREAM) and then skips the console
+    # handler, so lines are not written twice.
+    log_journald: Literal["auto", "on", "off"] = "auto"
+    log_journald_socket: Path = Path("/run/systemd/journal/socket")
+    syslog_identifier: str = Field(
+        default="nas-manager", pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$"
+    )
 
     # ------------------------------------------------------------------
     # Sessions and CSRF. Only NAS_SESSION_COOKIE_SECURE is a security
@@ -261,6 +273,20 @@ class Settings(BaseSettings):
     backup_run_retention_days: int = Field(default=180, ge=1, le=3650)
     backup_scrypt_n: int = Field(default=2**15, ge=2**10, le=2**20)
     backup_browse_limit: int = Field(default=2000, ge=10, le=100_000)
+
+    # ------------------------------------------------------------------
+    # Auditing and remote syslog (Phase 13). The worker seals audit events
+    # into a SHA-256 hash chain, forwards them to the syslog destinations
+    # configured on the Logging page and prunes events older than
+    # NAS_AUDIT_RETENTION_DAYS (0 keeps them forever) once they are sealed
+    # and forwarded. Application log records are forwarded best effort
+    # through a bounded in-memory queue of NAS_SYSLOG_QUEUE_SIZE records.
+    # ------------------------------------------------------------------
+    audit_retention_days: int = Field(default=90, ge=0, le=36500)
+    audit_export_max_rows: int = Field(default=100_000, ge=100, le=10_000_000)
+    syslog_batch_size: int = Field(default=500, ge=1, le=10_000)
+    syslog_timeout_seconds: int = Field(default=5, ge=1, le=120)
+    syslog_queue_size: int = Field(default=10_000, ge=100, le=1_000_000)
 
     @field_validator(
         "data_dir",

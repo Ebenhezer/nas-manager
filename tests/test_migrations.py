@@ -106,7 +106,7 @@ def test_current_revision_reports_diverged_rows(migrated_settings: Settings) -> 
         with db.engine.begin() as connection:
             connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('zzz')"))
         current = get_current_revision(db.engine)
-        assert current == "0012,zzz"
+        assert current == "0013,zzz"
         assert current != get_head_revision(migrated_settings)
     finally:
         db.dispose()
@@ -146,7 +146,7 @@ def test_alembic_cli_runs_from_project_root_and_creates_state_dir(
         timeout=60,
         check=False,
     )
-    assert "0012" in current.stdout + current.stderr
+    assert "0013" in current.stdout + current.stderr
 
 
 def test_phase7_downgrade_and_reupgrade(settings: Settings) -> None:
@@ -344,7 +344,40 @@ def test_phase12_downgrade_and_reupgrade(settings: Settings) -> None:
         assert "config_import_runs" not in inspect(db.engine).get_table_names()
         assert grants(db) == set()
         upgrade_to_head(settings)
-        assert get_current_revision(db.engine) == "0012"
+        assert get_current_revision(db.engine) == "0013"
         assert len(grants(db)) == 2
+    finally:
+        db.dispose()
+
+
+def test_phase13_downgrade_and_reupgrade(settings: Settings) -> None:
+    """0013 adds syslog destinations and the audit chain column; existing
+    audit events survive the round trip."""
+    from sqlalchemy import text
+
+    settings.ensure_directories()
+    upgrade_to_head(settings)
+    db = Database(settings.resolved_database_url)
+    try:
+        inspector = inspect(db.engine)
+        assert "syslog_destinations" in inspector.get_table_names()
+        columns = {column["name"] for column in inspector.get_columns("audit_events")}
+        assert "chain_hash" in columns
+        with db.engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO audit_events (event, category, outcome, actor_username) "
+                    "VALUES ('user.created', 'user', 'success', 'admin')"
+                )
+            )
+        command.downgrade(alembic_config(settings), "0012")
+        inspector = inspect(db.engine)
+        assert "syslog_destinations" not in inspector.get_table_names()
+        assert "chain_hash" not in {c["name"] for c in inspector.get_columns("audit_events")}
+        upgrade_to_head(settings)
+        assert get_current_revision(db.engine) == "0013"
+        with db.engine.connect() as connection:
+            count = connection.execute(text("SELECT count(*) FROM audit_events")).scalar_one()
+        assert count == 1
     finally:
         db.dispose()

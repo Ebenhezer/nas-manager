@@ -248,10 +248,13 @@ def commit_staged(
         session.flush()
         session.refresh(quota)
         if quota.used_bytes + total > quota.quota_bytes:
-            # The quota check runs *inside* the reservation transaction; record
-            # the rejection with its own commit so the failure is auditable
-            # even though the reservation is rolled back below.
+            # The quota check runs *inside* the reservation transaction; drop
+            # the reservation (and anything else pending, e.g. a resumable
+            # upload's "completed" event) and record the rejection with its
+            # own commit so the failure is auditable.
             ctx = context or {}
+            quota_bytes, used_bytes = quota.quota_bytes, quota.used_bytes
+            session.rollback()
             audit.record_audit_event(
                 session,
                 event=audit.PUBLIC_UPLOAD_REJECTED,
@@ -265,8 +268,8 @@ def commit_staged(
                     "uploader_key": key,
                     "filename": name,
                     "attempted_bytes": total,
-                    "quota_bytes": quota.quota_bytes,
-                    "used_bytes": quota.used_bytes,
+                    "quota_bytes": quota_bytes,
+                    "used_bytes": used_bytes,
                 },
                 ip_address=ip_address,
                 user_agent=ctx.get("user_agent"),
@@ -276,8 +279,8 @@ def commit_staged(
             raise QuotaExceededError(
                 "Upload rejected: the per-uploader quota is exhausted",
                 details={
-                    "quota_bytes": quota.quota_bytes,
-                    "used_bytes": quota.used_bytes,
+                    "quota_bytes": quota_bytes,
+                    "used_bytes": used_bytes,
                     "attempted_bytes": total,
                 },
             )

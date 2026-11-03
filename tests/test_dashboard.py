@@ -73,6 +73,7 @@ def test_management_pages_require_authentication(client: TestClient) -> None:
         "/videos",
         "/monitoring",
         "/alerts",
+        "/logging",
     ]:
         response = client.get(path, follow_redirects=False)
         assert response.status_code == 302, path
@@ -104,6 +105,8 @@ def test_dashboard_has_no_inline_script_or_style(page: TestClient) -> None:
         "/videos",
         "/monitoring",
         "/alerts",
+        "/logging",
+        "/audit",
     ],
 )
 def test_phase3_pages_have_no_inline_script_or_style(page: TestClient, path: str) -> None:
@@ -172,6 +175,49 @@ def test_phase10_pages_have_every_element_their_script_uses(
     missing = sorted(i for i in ids if f'id="{i}"' not in html)
     assert missing == []
     assert 'href="/monitoring"' in html and 'href="/alerts"' in html  # nav links
+
+
+@pytest.mark.parametrize(("path", "script"), [("/logging", "logging.js"), ("/audit", "audit.js")])
+def test_phase13_pages_have_every_element_their_script_uses(
+    page: TestClient, path: str, script: str
+) -> None:
+    import re
+
+    response = page.get(path)
+    assert response.status_code == 200
+    html = response.text
+    source = (STATIC_DIR / "js" / script).read_text()
+    ids = set(re.findall(r'(?:getElementById|field)\("([a-z0-9-]+)"\)', source))
+    ids |= {f"export-{fmt}" for fmt in ("csv", "jsonl")} if script == "audit.js" else set()
+    assert ids
+    missing = sorted(i for i in ids if f'id="{i}"' not in html)
+    assert missing == []
+    assert 'href="/logging"' in html
+
+
+def test_logging_page_needs_system_read(app: object, admin_user: object) -> None:
+    from fastapi import FastAPI
+
+    from app.services.users_service import create_user
+    from tests.conftest import ADMIN_PASSWORD, login
+
+    assert isinstance(app, FastAPI)
+    with app.state.db.session_factory() as session:
+        create_user(
+            session,
+            username="vera",
+            password=ADMIN_PASSWORD,
+            display_name=None,
+            email=None,
+            role_names=["viewer"],
+            groups=[],
+            settings=app.state.settings,
+            actor=admin_user,  # type: ignore[arg-type]
+        )
+    with TestClient(app) as viewer:
+        login(viewer, "vera", ADMIN_PASSWORD)
+        assert 'href="/logging"' not in viewer.get("/").text
+        assert viewer.get("/logging").status_code in (401, 403)
 
 
 def test_viewer_dashboard_has_no_alert_card(app: object, admin_user: object) -> None:

@@ -398,6 +398,11 @@ def test_public_target_with_token_quota(
         assert (quota.quota_bytes, quota.used_bytes) == (10, 5)
         names = [row.filename for row in session.execute(select(PublicUploadFile)).scalars()]
         assert names == ["b.jpg"]
+        # Phase 13: the rejected completion is not also audited as "completed".
+        completed = session.execute(
+            select(AuditEvent.target_id).where(AuditEvent.event == "upload.session_completed")
+        ).scalars()
+        assert list(completed) == [other]
     leftovers = list(public_uploads.uploader_dir(app.state.settings, key).iterdir())
     assert [p.name for p in leftovers] == ["b.jpg"]
 

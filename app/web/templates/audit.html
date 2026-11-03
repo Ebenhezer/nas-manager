@@ -3,33 +3,61 @@
 {% block content %}
 <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
   <h1 class="h3 mb-0">Audit log</h1>
-  <span id="audit-total" class="text-body-secondary small"></span>
+  <div class="d-flex align-items-center gap-2">
+    <span id="audit-total" class="text-body-secondary small"></span>
+    <a class="btn btn-sm btn-outline-secondary" id="export-csv" href="/api/v1/audit/events/export?format=csv" download>Export CSV</a>
+    <a class="btn btn-sm btn-outline-secondary" id="export-jsonl" href="/api/v1/audit/events/export?format=jsonl" download>Export JSON Lines</a>
+  </div>
 </div>
 <div id="error-banner" class="alert alert-danger d-none" role="alert"></div>
 
 <div class="card mb-4">
   <div class="card-body">
     <form id="audit-filter" class="row g-3">
-      <div class="col-12 col-md-3">
+      <div class="col-12 col-md-6 col-xl-4">
+        <label class="form-label" for="af-q">Search</label>
+        <input class="form-control" id="af-q" name="q" type="search" maxlength="200" placeholder="Event, user, target, IP, request id, details">
+      </div>
+      <div class="col-6 col-md-3 col-xl-2">
         <label class="form-label" for="af-category">Category</label>
         <select class="form-select" id="af-category" name="category">
           <option value="">all</option>
-          <option>auth</option><option>user</option><option>group</option>
-          <option>role</option><option>system</option>
         </select>
       </div>
-      <div class="col-12 col-md-3">
+      <div class="col-6 col-md-3 col-xl-2">
         <label class="form-label" for="af-outcome">Outcome</label>
         <select class="form-select" id="af-outcome" name="outcome">
           <option value="">all</option><option>success</option><option>failure</option>
         </select>
       </div>
-      <div class="col-12 col-md-3">
+      <div class="col-6 col-md-3 col-xl-2">
         <label class="form-label" for="af-actor">Actor</label>
-        <input class="form-control" id="af-actor" name="actor" autocapitalize="none">
+        <input class="form-control" id="af-actor" name="actor" autocapitalize="none" maxlength="64">
       </div>
-      <div class="col-12 col-md-3 d-flex align-items-end gap-2">
+      <div class="col-6 col-md-3 col-xl-2">
+        <label class="form-label" for="af-event">Event</label>
+        <input class="form-control" id="af-event" name="event" list="af-events" autocapitalize="none" maxlength="64">
+        <datalist id="af-events"></datalist>
+      </div>
+      <div class="col-6 col-md-3 col-xl-2">
+        <label class="form-label" for="af-since">From (UTC)</label>
+        <input class="form-control" id="af-since" name="since" type="datetime-local">
+      </div>
+      <div class="col-6 col-md-3 col-xl-2">
+        <label class="form-label" for="af-until">Until (UTC)</label>
+        <input class="form-control" id="af-until" name="until" type="datetime-local">
+      </div>
+      <div class="col-6 col-md-3 col-xl-2">
+        <label class="form-label" for="af-ip">IP address</label>
+        <input class="form-control" id="af-ip" name="ip" maxlength="64">
+      </div>
+      <div class="col-6 col-md-3 col-xl-2">
+        <label class="form-label" for="af-request">Request id</label>
+        <input class="form-control" id="af-request" name="request_id" maxlength="64">
+      </div>
+      <div class="col-12 col-xl-4 d-flex align-items-end gap-2">
         <button type="submit" class="btn btn-primary">Filter</button>
+        <button type="reset" class="btn btn-outline-secondary">Clear</button>
         <button type="button" id="audit-prev" class="btn btn-outline-secondary">Newer</button>
         <button type="button" id="audit-next" class="btn btn-outline-secondary">Older</button>
       </div>
@@ -39,15 +67,35 @@
 
 <div class="card">
   <div class="table-responsive">
-    <table class="table table-striped align-middle mb-0">
+    <table class="table table-striped table-hover align-middle mb-0">
       <thead>
         <tr>
           <th>Time (UTC)</th><th>Category</th><th>Event</th><th>Outcome</th>
-          <th>Actor</th><th>Target</th><th>IP</th>
+          <th>Actor</th><th>Target</th><th>IP</th><th class="text-end">Sealed</th>
         </tr>
       </thead>
       <tbody id="audit-body"></tbody>
     </table>
+  </div>
+</div>
+
+<div class="modal fade" id="event-modal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="event-modal-title">Event</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <dl class="row small" id="event-modal-fields"></dl>
+        <h6>Details</h6>
+        <pre class="small bg-body-tertiary p-2 rounded text-break" id="event-modal-details"></pre>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="event-modal-request">Show all events of this request</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
   </div>
 </div>
 {% endblock %}

@@ -27,7 +27,7 @@ class AuditEvent(Base):
         ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True
     )
     actor_username: Mapped[str] = mapped_column(
-        String(64), nullable=False, default="", server_default=""
+        String(64), nullable=False, default="", server_default="", index=True
     )
     event: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     category: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
@@ -40,3 +40,6 @@ class AuditEvent(Base):
     user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
     request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     details: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Phase 13: SHA-256 hash chain link, set by the worker when it seals the
+    # event (None until then). See app/services/audit_chain.py.
+    chain_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)

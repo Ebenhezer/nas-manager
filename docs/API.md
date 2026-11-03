@@ -119,7 +119,28 @@ Body: `{"current_password": "...", "new_password": "..."}`. 400 for a wrong curr
 
 `GET /audit/events?limit=50&offset=0&category=user&event=user.created&outcome=success&actor=admin`
 
-Returns `{"events": [...], "total": n, "limit": 50, "offset": 0}` newest-first. `limit` is capped at 200. Events carry `event`, `category`, `outcome`, `actor_username`, `target_type`/`target_id`, `ip_address`, `request_id` and `details`.
+Returns `{"events": [...], "total": n, "limit": 50, "offset": 0}` newest-first. `limit` is capped at 200. Events carry `event`, `category`, `outcome`, `actor_username`, `target_type`/`target_id`, `ip_address`, `user_agent`, `request_id`, `details`, and (Phase 13) `chain_hash` plus `sealed`.
+
+Filters (Phase 13, all optional, combined with AND): `category`, `event`, `outcome`, `actor`, `target_type`, `target_id`, `request_id`, `ip`, `since` (inclusive) / `until` (exclusive) as ISO 8601 timestamps (naive values are UTC), and `q`, a case-insensitive substring search over the event name, actor, target, IP address, request id, user agent and the JSON details (`%` and `_` are literal).
+
+- `GET /audit/events/export?format=csv|jsonl&<filters>` — a streamed download (newest first) of at most `NAS_AUDIT_EXPORT_MAX_ROWS` events; `X-Audit-Rows` gives the row count. CSV cells starting with `=`, `+`, `-`, `@`, tab or CR are prefixed with `'` so spreadsheets do not evaluate them. Every export is audited (`audit.exported`, with format, filters, rows and `truncated`).
+- `GET /audit/facets` — `{"categories": [...], "events": [...]}`: every known category and the event names present, for filter menus.
+- `GET /audit/integrity` — hash-chain status: `anchor_id`, `sealed_up_to`, `unsealed`, `retention_days`, `expired` (events past retention), `prunable_up_to`, `prune_held_back_by_forwarding`, `prune_held_back_by_sealing` and `last_verify`.
+- `POST /audit/verify` — recompute the chain now. Returns `{"ok", "checked", "sealed_up_to", "unsealed", "first_break_id", "reason", "verified_at"}`; audited as `audit.verified` (outcome `failure` when broken).
+
+Other Phase 13 events: `auth.permission_denied` (a 403 from a permission check; at most once per user, permission and endpoint per minute; details name the method, the route template and the auth method), `system.started` / `system.stopped` (web process and worker, target `process:<NAS_SYSLOG_IDENTIFIER>`), `audit.pruned`, `audit.chain_broken`, `remote.oauth_started`, and the `syslog.*` events below.
+
+## Remote syslog (Phase 13, `system:read` / `system:write`)
+
+- `GET /syslog/destinations` — list. `GET /syslog/status` — `{"destinations": [...], "logging": {...}, "worker_online": bool}`; `logging` describes this process's outputs (level, format, file, rotation, compression, journald, console) and its application-log forwarding counters (`remote_targets`, `remote_dropped`, `remote_send_errors`).
+- `POST /syslog/destinations` → 201. Body: `name`, `host`, `protocol` (`tls` default, `tcp`, `udp`), `port` (default 6514 for TLS, 514 otherwise), `ca_pem` (TLS only; replaces the system trust store), `format` (`rfc5424` default, `rfc3164`), `facility` (`local0`–`local7`, `user`, `daemon`, `auth`, `authpriv`), `enabled`, `forward_audit`, `audit_categories` (empty = all), `audit_failures_only`, `forward_logs`, `log_min_level`, `backfill` (also send existing events; default: start at the current end of the log) and `confirm`. UDP and TCP are plain text: without `confirm: true` the response is `400 confirmation_required` with the warnings.
+- `PATCH /syslog/destinations/{id}` — partial update; switching to a plaintext protocol, changing a plaintext destination's host or re-enabling it needs `confirm`. Leaving TLS drops a stored CA.
+- `DELETE /syslog/destinations/{id}` → 204.
+- `POST /syslog/destinations/{id}/test` — sends one message synchronously: `{"ok": bool, "message": "..."}` (UDP cannot confirm delivery).
+
+Responses never include the CA certificate (`has_ca_pem` instead) and report the forwarding state: `last_audit_id`, `lag`, `failing`, `consecutive_failures`, `last_success_at`, `last_error`, `next_attempt_at`. Audited as `syslog.destination_created/updated/deleted/tested`; the worker records `syslog.forward_failed` / `syslog.forward_recovered` on state changes only.
+
+Message format (RFC 5424): `<PRI>1 TIMESTAMP HOST NAS_SYSLOG_IDENTIFIER PID MSGID [nas@32473 id= event= category= outcome= actor= target= ip= request_id=] {json}`. `MSGID` is the audit category (`log` for application logs, `test` for the test message); severity is notice for successes and warning for failures. TCP/TLS use octet-counting framing; RFC 3164 uses newline framing over TCP.
 
 ## `GET /system/summary` (`dashboard:read`)
 
@@ -564,4 +585,4 @@ Audited (category `config`): `config.exported` (whether secrets were included an
 
 ## Planned
 
-Syslog and comprehensive auditing (13). Each phase will extend this document.
+Security hardening and deployment testing (14). Each phase will extend this document.

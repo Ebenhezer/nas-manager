@@ -420,3 +420,91 @@ def test_scheduled_backup_runs_on_the_backup_pool(
     worker.wait_idle()
     with db.session_factory() as session:
         assert len(session.execute(select(BackupRun)).scalars().all()) == 1
+
+
+# ---------------------------------------------------------------------------
+# Auditing and syslog (Phase 13)
+# ---------------------------------------------------------------------------
+
+
+def test_tick_seals_forwards_and_verifies(worker: Worker, db: Database) -> None:
+    from app.models import SyslogDestination
+    from app.services import audit, audit_chain
+    from tests.syslog_receivers import Receiver
+
+    receiver = Receiver("udp")
+    try:
+        with db.session_factory() as session:
+            session.add(
+                SyslogDestination(name="c", host="127.0.0.1", port=receiver.port, protocol="udp")
+            )
+            session.commit()
+            audit.record_audit_event(
+                session, event=audit.USER_CREATED, category=audit.CATEGORY_USER
+            )
+        worker.tick()
+        worker.wait_idle()
+        assert receiver.wait_for(1)
+    finally:
+        receiver.close()
+    with db.session_factory() as session:
+        unsealed = session.execute(
+            select(AuditEvent).where(AuditEvent.chain_hash.is_(None))
+        ).scalars()
+        assert list(unsealed) == []
+        assert audit_chain.last_verify_result(session)["ok"] is True  # type: ignore[index]
+        destination = session.execute(select(SyslogDestination)).scalar_one()
+        assert destination.last_audit_id > 0 and destination.consecutive_failures == 0
+
+
+def test_tick_reloads_log_forwarding_on_change(
+    worker: Worker, db: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.services.syslog import destinations
+
+    calls: list[int] = []
+
+    def fake_reload(session: object) -> int:
+        calls.append(1)
+        return 0
+
+    monkeypatch.setattr("app.worker.runner.reload_log_forwarding", fake_reload)
+    worker.tick()
+    worker.tick()
+    assert len(calls) == 1
+    with db.session_factory() as session:
+        destinations._bump_version(session)
+    worker.tick()
+    worker.wait_idle()
+    assert len(calls) == 2
+
+
+def test_run_forever_records_lifecycle_events(worker: Worker, db: Database) -> None:
+    from app.models import SyslogDestination
+    from app.services import audit
+    from tests.syslog_receivers import Receiver
+
+    receiver = Receiver("udp")
+    with db.session_factory() as session:
+        session.add(
+            SyslogDestination(name="c", host="127.0.0.1", port=receiver.port, protocol="udp")
+        )
+        session.commit()
+    worker.stop.set()
+    try:
+        worker.run_forever()
+        # The final pass forwards the shutdown event although stop is set.
+        messages = receiver.wait_for(2)
+    finally:
+        receiver.close()
+    assert any(b'event="system.stopped"' in m for m in messages)
+    with db.session_factory() as session:
+        rows = list(
+            session.execute(
+                select(AuditEvent)
+                .where(AuditEvent.category == audit.CATEGORY_SYSTEM)
+                .order_by(AuditEvent.id)
+            ).scalars()
+        )
+    assert [r.event for r in rows] == [audit.SYSTEM_STARTED, audit.SYSTEM_STOPPED]
+    assert rows[1].chain_hash is not None  # the final pass sealed the shutdown event

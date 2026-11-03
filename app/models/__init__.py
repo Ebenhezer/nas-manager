@@ -42,6 +42,7 @@ from app.models.remote import (
 from app.models.role import Role, RolePermission
 from app.models.samba_share import SambaShare
 from app.models.session import AuthSession
+from app.models.syslog_destination import SyslogDestination
 from app.models.upload_session import UploadSession
 from app.models.user import User
 
@@ -80,6 +81,7 @@ __all__ = [
     "SyncJob",
     "SyncJobEntry",
     "SyncRun",
+    "SyslogDestination",
     "UploadSession",
     "User",
     "group_roles",

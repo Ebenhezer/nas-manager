@@ -12,8 +12,10 @@ a client never silently runs with credentials it did not intend to use.
 
 from __future__ import annotations
 
+import threading
+import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from fastapi import Depends, Request
 from sqlalchemy.orm import Session
@@ -46,6 +48,29 @@ class CurrentUser:
     @property
     def auth_method(self) -> str:
         return AUTH_METHOD_TOKEN if self.token is not None else AUTH_METHOD_SESSION
+
+
+@dataclass
+class DenialThrottle:
+    """Audit each (user, permission, path) denial at most once per window, so
+    a client polling a forbidden endpoint cannot flood the audit log."""
+
+    window_seconds: float = 60.0
+    max_entries: int = 10_000
+    _seen: dict[tuple[int, str, str], float] = field(default_factory=dict)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def should_record(self, key: tuple[int, str, str]) -> bool:
+        now = time.monotonic()
+        with self._lock:
+            last = self._seen.get(key)
+            if last is not None and now - last < self.window_seconds:
+                return False
+            if len(self._seen) >= self.max_entries:
+                cutoff = now - self.window_seconds
+                self._seen = {k: v for k, v in self._seen.items() if v >= cutoff}
+            self._seen[key] = now
+            return True
 
 
 def request_audit_context(request: Request) -> dict[str, str | None]:
@@ -133,11 +158,16 @@ def require_session_auth(current: CurrentUser = Depends(get_current_user)) -> Cu
     return current
 
 
-def require_permission(permission: str) -> Callable[[CurrentUser], CurrentUser]:
+def require_permission(permission: str) -> Callable[..., CurrentUser]:
     """Parameterized dependency: ``Depends(require_permission("users:write"))``."""
 
-    def guard(current: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    def guard(
+        request: Request,
+        current: CurrentUser = Depends(get_current_user),
+        db: Session = Depends(get_db),
+    ) -> CurrentUser:
         if permission not in current.permissions:
+            _audit_denial(request, db, current, permission)
             raise ForbiddenError(
                 f"Missing required permission: {permission}",
                 details={"permission": permission},
@@ -145,6 +175,39 @@ def require_permission(permission: str) -> Callable[[CurrentUser], CurrentUser]:
         return current
 
     return guard
+
+
+def _path_template(request: Request) -> str:
+    """``/api/v1/users/{user_id}`` for ``/api/v1/users/7``: the throttle and the
+    audit details name the endpoint, not each object id."""
+    by_value = {str(value): name for name, value in request.path_params.items()}
+    segments = [
+        f"{{{by_value[segment]}}}" if segment in by_value else segment
+        for segment in request.url.path.split("/")
+    ]
+    return "/".join(segments)
+
+
+def _audit_denial(request: Request, db: Session, current: CurrentUser, permission: str) -> None:
+    throttle: DenialThrottle = request.app.state.denial_throttle
+    path = _path_template(request)
+    if not throttle.should_record((current.user.id, permission, path)):
+        return
+    audit.record_audit_event(
+        db,
+        event=audit.AUTH_PERMISSION_DENIED,
+        category=audit.CATEGORY_AUTH,
+        outcome=audit.OUTCOME_FAILURE,
+        actor=current.user,
+        target_type="permission",
+        target_id=permission,
+        details={
+            "method": request.method,
+            "path": path,
+            "auth_method": current.auth_method,
+        },
+        **audit.request_context(request_audit_context(request)),
+    )
 
 
 def require_session_permission(permission: str) -> Callable[[CurrentUser], CurrentUser]:

@@ -311,6 +311,16 @@ def start_oauth(
             "expires_at": (utcnow_naive() + OAUTH_STATE_TTL).isoformat(),
         }
     )
+    audit.record_audit_event(
+        session,
+        event=audit.REMOTE_OAUTH_STARTED,
+        category=audit.CATEGORY_REMOTE_SYNC,
+        actor=actor,
+        target_type="remote_connection",
+        target_id=row.id,
+        details={"name": row.name},
+        commit=False,
+    )
     session.commit()
     return authorization_url(
         client_id=str(row.config["client_id"]),

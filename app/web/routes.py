@@ -173,6 +173,18 @@ def audit_page(
     return templates.TemplateResponse(request, "audit.html", _page_context(request, current))
 
 
+@router.get("/logging", response_class=HTMLResponse)
+def logging_page(
+    request: Request, current: CurrentUser | None = Depends(resolve_web_user)
+) -> Response:
+    redirect = _protected(current)
+    if redirect is not None:
+        return redirect
+    if current is None or "system:read" not in current.permissions:
+        raise UnauthorizedError("Missing required permission: system:read")
+    return templates.TemplateResponse(request, "logging.html", _page_context(request, current))
+
+
 @router.get("/files", response_class=HTMLResponse)
 def files_page(
     request: Request, current: CurrentUser | None = Depends(resolve_web_user)

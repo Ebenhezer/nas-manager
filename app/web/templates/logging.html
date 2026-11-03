@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block title %}Logging · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
+  <h1 class="h3 mb-0">Logging</h1>
+  <span id="worker-badge" class="badge text-bg-secondary">Worker status…</span>
+</div>
+<div id="error-banner" class="alert alert-danger d-none" role="alert"></div>
+<div id="notice-banner" class="alert alert-success d-none" role="status"></div>
+
+<div class="row g-4 mb-4">
+  <div class="col-12 col-lg-6">
+    <div class="card h-100">
+      <div class="card-header">Local logging</div>
+      <div class="card-body">
+        <dl class="row small mb-0" id="local-logging"></dl>
+        <p class="small text-body-secondary mb-0 mt-2">
+          Set with <code>NAS_LOG_*</code> in the environment file; changes need a restart.
+        </p>
+      </div>
+    </div>
+  </div>
+  <div class="col-12 col-lg-6">
+    <div class="card h-100">
+      <div class="card-header d-flex align-items-center justify-content-between">
+        <span>Audit log integrity</span>
+        <button type="button" class="btn btn-sm btn-outline-primary" id="verify-chain">Verify now</button>
+      </div>
+      <div class="card-body">
+        <div id="integrity-badge" class="mb-2"></div>
+        <dl class="row small mb-0" id="integrity"></dl>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header d-flex align-items-center justify-content-between">
+    <span>Remote syslog destinations</span>
+    {% if can('system:write') %}
+    <button type="button" class="btn btn-sm btn-primary" id="add-destination">Add destination</button>
+    {% endif %}
+  </div>
+  {% if can('system:write') %}
+  <form id="destination-form" class="card-body border-bottom d-none" novalidate autocomplete="off">
+    <h2 class="h6" id="destination-form-title">New destination</h2>
+    <div class="row g-3">
+      <div class="col-12 col-md-4">
+        <label class="form-label" for="dest-name">Name</label>
+        <input class="form-control" id="dest-name" name="name" maxlength="64" required>
+      </div>
+      <div class="col-12 col-md-4">
+        <label class="form-label" for="dest-host">Host</label>
+        <input class="form-control" id="dest-host" name="host" maxlength="255" required autocapitalize="none" spellcheck="false">
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label" for="dest-protocol">Protocol</label>
+        <select class="form-select" id="dest-protocol" name="protocol">
+          <option value="tls">TLS</option>
+          <option value="tcp">TCP</option>
+          <option value="udp">UDP</option>
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label" for="dest-port">Port</label>
+        <input class="form-control" id="dest-port" name="port" type="number" min="1" max="65535" placeholder="default">
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label" for="dest-format">Format</label>
+        <select class="form-select" id="dest-format" name="format">
+          <option value="rfc5424">RFC 5424</option>
+          <option value="rfc3164">RFC 3164 (legacy)</option>
+        </select>
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label" for="dest-facility">Facility</label>
+        <select class="form-select" id="dest-facility" name="facility">
+          <option>local0</option><option>local1</option><option>local2</option><option>local3</option>
+          <option>local4</option><option>local5</option><option>local6</option><option>local7</option>
+          <option>user</option><option>daemon</option><option>auth</option><option>authpriv</option>
+        </select>
+      </div>
+      <div class="col-12 col-md-6">
+        <label class="form-label" for="dest-categories">Audit categories</label>
+        <select class="form-select" id="dest-categories" name="audit_categories" multiple size="4"></select>
+        <div class="form-text">None selected sends every category.</div>
+      </div>
+      <div class="col-12" id="dest-ca-group">
+        <label class="form-label" for="dest-ca">CA certificate (PEM, optional)</label>
+        <textarea class="form-control font-monospace small" id="dest-ca" name="ca_pem" rows="3" spellcheck="false" placeholder="Leave empty to use the system trust store"></textarea>
+        <div class="form-text" id="dest-ca-hint"></div>
+      </div>
+      <div class="col-12 d-flex flex-wrap gap-4">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="dest-enabled" checked>
+          <label class="form-check-label" for="dest-enabled">Enabled</label>
+        </div>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="dest-audit" checked>
+          <label class="form-check-label" for="dest-audit">Forward audit events</label>
+        </div>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="dest-failures">
+          <label class="form-check-label" for="dest-failures">Failures only</label>
+        </div>
+        <div class="form-check" id="dest-backfill-group">
+          <input class="form-check-input" type="checkbox" id="dest-backfill">
+          <label class="form-check-label" for="dest-backfill">Also send existing events</label>
+        </div>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="dest-logs">
+          <label class="form-check-label" for="dest-logs">Forward application logs</label>
+        </div>
+        <div>
+          <label class="form-label visually-hidden" for="dest-level">Minimum log level</label>
+          <select class="form-select form-select-sm" id="dest-level" name="log_min_level">
+            <option>WARNING</option><option>ERROR</option><option>CRITICAL</option><option>INFO</option><option>DEBUG</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="mt-3 d-flex gap-2">
+      <button type="submit" class="btn btn-primary btn-sm">Save destination</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm" id="destination-cancel">Cancel</button>
+    </div>
+  </form>
+  {% endif %}
+  <div class="table-responsive">
+    <table class="table table-striped align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Name</th><th>Collector</th><th>Forwards</th><th>Status</th><th>Backlog</th><th>Last delivery</th>
+          <th class="text-end"></th>
+        </tr>
+      </thead>
+      <tbody id="destinations-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="modal fade" id="confirm-modal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="confirm-modal-title">Confirm</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div id="confirm-modal-plan" class="mb-2 text-break"></div>
+        <ul id="confirm-modal-warnings" class="small text-danger mb-0"></ul>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirm-modal-accept">Confirm</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script type="module" src="{{ url_for('static', path='js/logging.js') }}"></script>
+{% endblock %}

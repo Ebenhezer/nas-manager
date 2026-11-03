@@ -69,7 +69,7 @@ SQLAlchemy 2 with a naming convention so constraints are stable across SQLite an
 
 ## Request lifecycle and observability
 
-Every response carries `X-Request-ID`. A client-supplied id is honoured only if it matches `[A-Za-z0-9-]{1,64}`; otherwise a new one is generated. The id is in each log line and in the error envelope, and it is recorded on every audit event. Logs go to stdout (journald under systemd) and to a size-rotated file. Extra fields whose names look sensitive (`password`, `token`, `secret`, `authorization`, `api_key`, `credential`) are replaced with `***`.
+Every response carries `X-Request-ID`. A client-supplied id is honoured only if it matches `[A-Za-z0-9-]{1,64}`; otherwise a new one is generated. The id is in each log line and in the error envelope, and it is recorded on every audit event. Logs go to stdout (or natively to journald under systemd, Phase 13), to a rotated file and, best effort, to remote syslog (see Phase 13 below). Extra fields whose names look sensitive (`password`, `token`, `secret`, `authorization`, `api_key`, `credential`) are replaced with `***`.
 
 ## Deployment topology
 
@@ -161,6 +161,28 @@ The web process never executes arbitrary commands and never runs as root. The he
 - **Not automatic:** `smb.conf` is not rewritten (the Samba page applies it with `testparm` and a backup), and imported backup repositories start uninitialized.
 - Migration `0012` adds `config_import_runs` and the `config:export` / `config:import` permissions (admin).
 
+## Syslog and comprehensive auditing (Phase 13)
+
+```
+record_audit_event ──► audit_events row ──commit──► "app.audit" log record ──► file / journald / console
+                              │                                       (rolled back ⇒ nothing logged)
+                              ▼
+        worker audit pool: seal (hash chain) ─► forward (per-destination cursor) ─► remote syslog
+                           daily verify, hourly prune (sealed + forwarded + older than retention)
+
+any log record ≥ level ──► RemoteLogHandler queue (bounded, non-blocking) ──► remote syslog (best effort)
+```
+
+- **Search** (`app/services/audit.py`). One `AuditFilters` value drives the list, the count and the export, so they never disagree. The export streams keyset-paginated chunks from its own session.
+- **Log stream.** `record_audit_event` remembers the row on the session; SQLAlchemy `after_flush` captures the id and `after_commit` logs it on `app.audit` (INFO success, WARNING failure, `audit_*` extras), `after_rollback` discards it. Existing `commit=False` callers are unchanged.
+- **Hash chain** (`app/services/audit_chain.py`). The worker seals events in id order: `chain_hash = sha256(previous + canonical JSON)`. The canonical form excludes `actor_user_id` (it is `ON DELETE SET NULL`). `app_settings` holds the anchor (the newest pruned event, so the chain survives retention) and the head (so truncating the tail is detected). Verification reads with `populate_existing`, so it compares the database, not cached objects.
+- **Retention.** `prune` removes a contiguous id prefix of events that are past `NAS_AUDIT_RETENTION_DAYS`, sealed and at or below every enabled destination's cursor, always keeps the newest event (SQLite would otherwise reuse ids below the anchor and the cursors), moves the anchor in the same transaction and records `audit.pruned`.
+- **Remote syslog** (`app/services/syslog/`). `format` renders RFC 5424/3164; `transport` frames and sends over UDP, TCP or verified TLS; `destinations` validates and versions the configuration (`syslog.config_version` in `app_settings`); `forwarder` (worker) sends audit events above each destination's cursor and moves it after every accepted batch (at-least-once), with exponential backoff and transition-only audit events; `log_handler` is a root-logger handler in every process that queues formatted records for destinations with `forward_logs` and sends them from a daemon thread. It excludes `app.audit` (forwarded reliably by the worker) and its own package (no feedback loop). The web process reloads it after each change; the worker on the next tick when the version moved.
+- **Journald** (`app/core/journald.py`). The native datagram protocol (stdlib only) with `SYSLOG_IDENTIFIER`, `PRIORITY`, `CODE_*`, `REQUEST_ID` and every extra as an upper-case `NAS_*` field. `NAS_LOG_JOURNALD=auto` turns it on when systemd sets `JOURNAL_STREAM`, and then the console handler is skipped.
+- **Rotation.** Size (`RotatingFileHandler`) or daily at midnight UTC (`TimedRotatingFileHandler`), optional gzip through `namer`/`rotator`. Each process keeps its own file.
+- **Coverage.** `require_permission` audits denials (`auth.permission_denied`, throttled per user, permission and route template). `tests/test_audit_coverage.py` lists every state-changing route with its event or an exemption, so a new unaudited route fails the build.
+- Migration `0013` adds `syslog_destinations`, `audit_events.chain_hash` and an index on `actor_username`. No new permissions.
+
 ## Planned additions
 
-Audit/syslog (13), security hardening and deployment testing (14).
+Security hardening and deployment testing (14).

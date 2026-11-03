@@ -7,13 +7,23 @@ to reconstruct "who did what, when, and did it succeed".
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Iterator
+from dataclasses import dataclass, fields
+from datetime import UTC, datetime
 from typing import Any, TypedDict
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, String, cast, event, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.logging import request_id_var
 from app.models import AuditEvent, User
+
+# Committed events are also written to the log stream (file, journald,
+# console) on this logger. Remote syslog forwarding of audit events does not
+# use it: the worker forwards from the table so nothing is lost when a
+# collector is down (Phase 13).
+audit_logger = logging.getLogger("app.audit")
 
 CATEGORY_AUTH = "auth"
 CATEGORY_USER = "user"
@@ -33,6 +43,12 @@ CATEGORY_MEDIA = "media"
 CATEGORY_MONITORING = "monitoring"
 CATEGORY_BACKUP = "backup"
 CATEGORY_CONFIG = "config"
+CATEGORY_AUDIT = "audit"
+CATEGORY_SYSLOG = "syslog"
+
+CATEGORIES: tuple[str, ...] = tuple(
+    sorted(value for name, value in dict(globals()).items() if name.startswith("CATEGORY_"))
+)
 
 OUTCOME_SUCCESS = "success"
 OUTCOME_FAILURE = "failure"
@@ -43,6 +59,7 @@ AUTH_LOGIN_FAILURE = "auth.login.failure"
 AUTH_LOGIN_LOCKED = "auth.login.locked"
 AUTH_LOGIN_RATE_LIMITED = "auth.login.rate_limited"
 AUTH_LOGOUT = "auth.logout"
+AUTH_PERMISSION_DENIED = "auth.permission_denied"
 
 # user events
 USER_CREATED = "user.created"
@@ -121,6 +138,7 @@ REMOTE_CREATED = "remote.created"
 REMOTE_UPDATED = "remote.updated"
 REMOTE_DELETED = "remote.deleted"
 REMOTE_TESTED = "remote.tested"
+REMOTE_OAUTH_STARTED = "remote.oauth_started"
 REMOTE_OAUTH_CONNECTED = "remote.oauth_connected"
 REMOTE_OAUTH_FAILED = "remote.oauth_failed"
 SYNC_JOB_CREATED = "sync_job.created"
@@ -187,6 +205,22 @@ CONFIG_IMPORTED = "config.imported"
 CONFIG_IMPORT_REFUSED = "config.import_refused"
 CONFIG_ROLLED_BACK = "config.rolled_back"
 
+# Process lifecycle (Phase 13)
+SYSTEM_STARTED = "system.started"
+SYSTEM_STOPPED = "system.stopped"
+
+# Auditing and syslog (Phase 13)
+AUDIT_EXPORTED = "audit.exported"
+AUDIT_VERIFIED = "audit.verified"
+AUDIT_CHAIN_BROKEN = "audit.chain_broken"
+AUDIT_PRUNED = "audit.pruned"
+SYSLOG_DESTINATION_CREATED = "syslog.destination_created"
+SYSLOG_DESTINATION_UPDATED = "syslog.destination_updated"
+SYSLOG_DESTINATION_DELETED = "syslog.destination_deleted"
+SYSLOG_DESTINATION_TESTED = "syslog.destination_tested"
+SYSLOG_FORWARD_FAILED = "syslog.forward_failed"
+SYSLOG_FORWARD_RECOVERED = "syslog.forward_recovered"
+
 
 class RequestContext(TypedDict):
     ip_address: str | None
@@ -238,9 +272,152 @@ def record_audit_event(
         request_id=request_id,
     )
     session.add(row)
+    session.info.setdefault(_PENDING_KEY, []).append(row)
     if commit:
         session.commit()
     return row
+
+
+# ---------------------------------------------------------------------------
+# Log stream emission. An event reaches the logs only once its transaction
+# commits: ids are captured after the flush, the lines are written after the
+# commit, and a rollback discards them, so a refused or rolled-back action
+# never shows up in journald or the log file.
+# ---------------------------------------------------------------------------
+
+_PENDING_KEY = "nas_pending_audit"
+_FLUSHED_KEY = "nas_flushed_audit"
+
+
+def _snapshot(row: AuditEvent) -> dict[str, Any]:
+    target = f"{row.target_type}:{row.target_id}" if row.target_type else None
+    return {
+        "audit_id": row.id,
+        "audit_event": row.event,
+        "audit_category": row.category,
+        "audit_outcome": row.outcome,
+        "audit_actor": row.actor_username or None,
+        "audit_target": target,
+        "audit_ip": row.ip_address,
+        "request_id": row.request_id,
+    }
+
+
+@event.listens_for(Session, "after_flush")
+def _capture_flushed(session: Session, _flush_context: object) -> None:
+    pending: list[AuditEvent] = session.info.get(_PENDING_KEY) or []
+    if not pending:
+        return
+    flushed = session.info.setdefault(_FLUSHED_KEY, [])
+    remaining: list[AuditEvent] = []
+    for row in pending:
+        if row.id is None:
+            remaining.append(row)
+        else:
+            flushed.append(_snapshot(row))
+    session.info[_PENDING_KEY] = remaining
+
+
+@event.listens_for(Session, "after_commit")
+def _emit_committed(session: Session) -> None:
+    flushed: list[dict[str, Any]] = session.info.pop(_FLUSHED_KEY, None) or []
+    for item in flushed:
+        level = logging.INFO if item["audit_outcome"] == OUTCOME_SUCCESS else logging.WARNING
+        actor = item["audit_actor"] or "-"
+        audit_logger.log(
+            level,
+            "audit %s %s by %s",
+            item["audit_event"],
+            item["audit_outcome"],
+            actor,
+            extra={key: value for key, value in item.items() if value is not None},
+        )
+
+
+@event.listens_for(Session, "after_rollback")
+def _discard_rolled_back(session: Session) -> None:
+    session.info.pop(_PENDING_KEY, None)
+    session.info.pop(_FLUSHED_KEY, None)
+
+
+# ---------------------------------------------------------------------------
+# Search
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AuditFilters:
+    """Search criteria shared by the list, the count and the export."""
+
+    category: str | None = None
+    event: str | None = None
+    outcome: str | None = None
+    actor_username: str | None = None
+    target_type: str | None = None
+    target_id: str | None = None
+    request_id: str | None = None
+    ip_address: str | None = None
+    since: datetime | None = None
+    until: datetime | None = None
+    q: str | None = None
+
+    def as_details(self) -> dict[str, Any]:
+        """The filters that are set, for audit details of an export."""
+        result: dict[str, Any] = {}
+        for item in fields(self):
+            value = getattr(self, item.name)
+            if value not in (None, ""):
+                result[item.name] = value.isoformat() if isinstance(value, datetime) else value
+        return result
+
+
+def _naive_utc(value: datetime) -> datetime:
+    return value.astimezone(UTC).replace(tzinfo=None) if value.tzinfo else value
+
+
+def _like_pattern(text: str) -> str:
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _apply_filters[S: Select[Any]](stmt: S, filters: AuditFilters) -> S:
+    exact = {
+        AuditEvent.category: filters.category,
+        AuditEvent.event: filters.event,
+        AuditEvent.outcome: filters.outcome,
+        AuditEvent.actor_username: filters.actor_username,
+        AuditEvent.target_type: filters.target_type,
+        AuditEvent.target_id: filters.target_id,
+        AuditEvent.request_id: filters.request_id,
+        AuditEvent.ip_address: filters.ip_address,
+    }
+    for column, value in exact.items():
+        if value:
+            stmt = stmt.where(column == value)
+    if filters.since is not None:
+        stmt = stmt.where(AuditEvent.created_at >= _naive_utc(filters.since))
+    if filters.until is not None:
+        stmt = stmt.where(AuditEvent.created_at < _naive_utc(filters.until))
+    if filters.q and filters.q.strip():
+        pattern = _like_pattern(filters.q.strip())
+        stmt = stmt.where(
+            or_(
+                *(
+                    column.ilike(pattern, escape="\\")
+                    for column in (
+                        AuditEvent.event,
+                        AuditEvent.actor_username,
+                        AuditEvent.target_type,
+                        AuditEvent.target_id,
+                        AuditEvent.ip_address,
+                        AuditEvent.request_id,
+                        AuditEvent.user_agent,
+                        cast(AuditEvent.details, String),
+                    )
+                )
+            )
+        )
+    return stmt
 
 
 def query_audit_events(
@@ -252,27 +429,19 @@ def query_audit_events(
     event: str | None = None,
     outcome: str | None = None,
     actor_username: str | None = None,
+    filters: AuditFilters | None = None,
 ) -> tuple[list[AuditEvent], int]:
     """Return ``(events, total)`` with the newest events first and ``total``
     reflecting the filters before pagination (unbounded)."""
     limit = max(1, min(int(limit), 200))
     offset = max(0, int(offset))
-    stmt = select(AuditEvent)
-    total_stmt: Select[tuple[int]] = select(func.count(AuditEvent.id))
-    if category:
-        stmt = stmt.where(AuditEvent.category == category)
-        total_stmt = total_stmt.where(AuditEvent.category == category)
-    if event:
-        stmt = stmt.where(AuditEvent.event == event)
-        total_stmt = total_stmt.where(AuditEvent.event == event)
-    if outcome:
-        stmt = stmt.where(AuditEvent.outcome == outcome)
-        total_stmt = total_stmt.where(AuditEvent.outcome == outcome)
-    if actor_username:
-        stmt = stmt.where(AuditEvent.actor_username == actor_username)
-        total_stmt = total_stmt.where(AuditEvent.actor_username == actor_username)
-    total_value = session.execute(total_stmt).scalar_one()
-    total: int = total_value[0] if isinstance(total_value, tuple) else int(total_value)
+    if filters is None:
+        filters = AuditFilters(
+            category=category, event=event, outcome=outcome, actor_username=actor_username
+        )
+    stmt = _apply_filters(select(AuditEvent), filters)
+    total_stmt = _apply_filters(select(func.count(AuditEvent.id)), filters)
+    total = int(session.execute(total_stmt).scalar_one())
     rows = (
         session.execute(
             stmt.order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
@@ -282,4 +451,36 @@ def query_audit_events(
         .scalars()
         .all()
     )
-    return list(rows), int(total)
+    return list(rows), total
+
+
+def iter_audit_events(
+    session: Session, filters: AuditFilters, *, max_rows: int, chunk: int = 1000
+) -> Iterator[AuditEvent]:
+    """Yield matching events newest first (by id), at most ``max_rows``,
+    reading in keyset-paginated chunks so an export never loads everything."""
+    emitted = 0
+    before: int | None = None
+    while emitted < max_rows:
+        stmt = _apply_filters(select(AuditEvent), filters)
+        if before is not None:
+            stmt = stmt.where(AuditEvent.id < before)
+        size = min(chunk, max_rows - emitted)
+        rows = list(session.execute(stmt.order_by(AuditEvent.id.desc()).limit(size)).scalars())
+        if not rows:
+            return
+        for row in rows:
+            yield row
+            session.expunge(row)
+        emitted += len(rows)
+        before = rows[-1].id
+
+
+def audit_facets(session: Session) -> dict[str, list[str]]:
+    """Known categories plus the event names that occur in the table."""
+    present = session.execute(select(AuditEvent.category).distinct()).scalars()
+    events = session.execute(select(AuditEvent.event).distinct().order_by(AuditEvent.event))
+    return {
+        "categories": sorted(set(CATEGORIES) | {str(value) for value in present}),
+        "events": [str(value) for value in events.scalars()],
+    }

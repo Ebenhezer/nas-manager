@@ -17,6 +17,8 @@ Environment=NAS_LOG_DIR=/var/log/nas-manager
 Environment=NAS_ENVIRONMENT=production
 # The worker writes its own log file next to the web application's.
 Environment=NAS_LOG_FILE_NAME=worker.log
+# Phase 13: journald / syslog identifier of the worker's log lines.
+Environment=NAS_SYSLOG_IDENTIFIER=nas-manager-worker
 
 ExecStart=/opt/nas-manager/.venv/bin/python -m app.worker
 
