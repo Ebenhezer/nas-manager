@@ -44,6 +44,8 @@ def test_upgrade_creates_schema_and_reaches_head(settings: Settings) -> None:
             "upload_sessions",
             "file_changes",
             *PHASE10_TABLES,
+            *PHASE11_TABLES,
+            "config_import_runs",
         } <= tables
     finally:
         db.dispose()
@@ -104,7 +106,7 @@ def test_current_revision_reports_diverged_rows(migrated_settings: Settings) -> 
         with db.engine.begin() as connection:
             connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('zzz')"))
         current = get_current_revision(db.engine)
-        assert current == "0010,zzz"
+        assert current == "0012,zzz"
         assert current != get_head_revision(migrated_settings)
     finally:
         db.dispose()
@@ -144,7 +146,7 @@ def test_alembic_cli_runs_from_project_root_and_creates_state_dir(
         timeout=60,
         check=False,
     )
-    assert "0010" in current.stdout + current.stderr
+    assert "0012" in current.stdout + current.stderr
 
 
 def test_phase7_downgrade_and_reupgrade(settings: Settings) -> None:
@@ -266,9 +268,83 @@ def test_phase10_downgrade_and_reupgrade(settings: Settings) -> None:
         command.downgrade(alembic_config(settings), "0009")
         assert not PHASE10_TABLES & set(inspect(db.engine).get_table_names())
         upgrade_to_head(settings)
-        assert get_current_revision(db.engine) == "0010"
+        assert get_current_revision(db.engine) == get_head_revision(settings)
         with db.engine.connect() as connection:
             count = connection.execute(text("SELECT COUNT(*) FROM alert_rules")).scalar_one()
         assert count == 10
+    finally:
+        db.dispose()
+
+
+PHASE11_TABLES = {
+    "backup_repositories",
+    "backup_jobs",
+    "backup_runs",
+    "backup_snapshots",
+    "backup_blobs",
+}
+
+
+def test_phase11_downgrade_and_reupgrade(settings: Settings) -> None:
+    """0011 grants the backup permissions, drops its five tables, and re-applies."""
+    from sqlalchemy import text
+
+    def grants(db: Database) -> set[tuple[str, str]]:
+        with db.engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    "SELECT r.name, p.permission FROM role_permissions p "
+                    "JOIN roles r ON r.id = p.role_id WHERE p.permission LIKE 'backup:%'"
+                )
+            ).all()
+        return {(row[0], row[1]) for row in rows}
+
+    settings.ensure_directories()
+    upgrade_to_head(settings)
+    db = Database(settings.resolved_database_url)
+    try:
+        assert set(inspect(db.engine).get_table_names()) >= PHASE11_TABLES
+        assert grants(db) == {
+            ("admin", "backup:read"),
+            ("admin", "backup:write"),
+            ("admin", "backup:restore"),
+            ("operator", "backup:read"),
+        }
+        command.downgrade(alembic_config(settings), "0010")
+        assert not PHASE11_TABLES & set(inspect(db.engine).get_table_names())
+        assert grants(db) == set()
+        upgrade_to_head(settings)
+        assert get_current_revision(db.engine) == get_head_revision(settings)
+        assert len(grants(db)) == 4
+    finally:
+        db.dispose()
+
+
+def test_phase12_downgrade_and_reupgrade(settings: Settings) -> None:
+    """0012 adds the import history table and the admin-only config permissions."""
+    from sqlalchemy import text
+
+    def grants(db: Database) -> set[tuple[str, str]]:
+        with db.engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    "SELECT r.name, p.permission FROM role_permissions p "
+                    "JOIN roles r ON r.id = p.role_id WHERE p.permission LIKE 'config:%'"
+                )
+            ).all()
+        return {(row[0], row[1]) for row in rows}
+
+    settings.ensure_directories()
+    upgrade_to_head(settings)
+    db = Database(settings.resolved_database_url)
+    try:
+        assert "config_import_runs" in inspect(db.engine).get_table_names()
+        assert grants(db) == {("admin", "config:export"), ("admin", "config:import")}
+        command.downgrade(alembic_config(settings), "0011")
+        assert "config_import_runs" not in inspect(db.engine).get_table_names()
+        assert grants(db) == set()
+        upgrade_to_head(settings)
+        assert get_current_revision(db.engine) == "0012"
+        assert len(grants(db)) == 2
     finally:
         db.dispose()

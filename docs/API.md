@@ -475,6 +475,93 @@ Webhook body for alert events: `{"event": "firing"|"resolved", "host", "alert": 
 
 Audited (category `monitoring`): `alert_rule.created/updated/deleted`, `alert_channel.created/updated/deleted/tested` (secret field names only, never values), `alert.acknowledged`, and `alert.notification_failed` (outcome `failure`, actor `system`).
 
+## Backups (Phase 11)
+
+Permissions: `backup:read` (admin, operator) for everything that only reads; `backup:write` (admin) for repositories, jobs, runs, verify and prune; `backup:restore` (admin) for restores and for cancelling a restore. Endpoints that carry a repository passphrase are **session only** (API tokens get 403). Runs are executed by the worker; the API queues them (202) and you poll `GET /backup-runs/{id}`.
+
+### Status
+
+- `GET /backup/status` returns `{"worker_online", "worker_heartbeat_at", "queued_runs", "running_runs", "local_roots", "file_roots", "staging_dir"}`.
+
+### Repositories
+
+- `GET /backup-repositories` returns `[{"id", "name", "target_kind": "local"|"remote", "local_root", "connection_id", "repo_path", "initialized_at", "last_verified_at", "last_verify_status", "created_at", "updated_at"}]`. The passphrase is never returned.
+- `POST /backup-repositories` (session only) takes `{"name", "target_kind", "local_root"?, "connection_id"?, "repo_path", "passphrase"}` and returns 201.
+  - `local_root` must be one of `NAS_BACKUP_LOCAL_ROOTS` (400 otherwise, listing the allowed roots); `repo_path` is required for local repositories and may not escape (`..` returns 400).
+  - Remote repositories need an existing `connection_id` (404 otherwise).
+  - `passphrase`: 12–1024 characters (422). A duplicate name returns 409.
+- `PATCH /backup-repositories/{id}` (session only) accepts any create field. Changing the location or passphrase is refused while a run is active (409) and marks the repository uninitialized until the next `init`.
+- `DELETE /backup-repositories/{id}` returns 204. Refused (409) while jobs use it or a run is active. The data on the target is left alone.
+- `POST /backup-repositories/{id}/init` connects synchronously and returns `{"repository", "created", "snapshots"}`: an empty or new folder becomes a repository; an existing repository is adopted (`created: false`) if the passphrase unlocks it, and its snapshots are catalogued. A wrong passphrase returns 400 `wrong_passphrase`; a non-empty folder that is not a repository returns 409; an unreachable target returns 502.
+- `POST /backup-repositories/{id}/verify` takes `{"full": true, "snapshot_id"?}` (catalogue id) and queues a verify run (202).
+- `POST /backup-repositories/{id}/prune` takes `{"dry_run": true, "confirm": false}`. A real prune (`dry_run: false`) without `confirm` returns 400 `confirmation_required` with `details.warnings` (how many snapshots would go).
+- `GET /backup-repositories/{id}/snapshots?job_id&limit` returns `[{"id", "repository_id", "snapshot_id", "job_id", "job_name", "source_kind", "source_label", "taken_at", "file_count", "total_bytes", "verified_at", "verify_status", "verify_error"}]`, newest first.
+
+Runs, jobs and snapshots need an initialized repository (409 `Initialize the repository first`).
+
+### Jobs
+
+- `GET /backup-jobs`, `GET /backup-jobs/{id}` return `{"id", "name", "repository_id", "direction": "push"|"pull", "source_kind", "source_root", "source_path", "source_connection_id", "exclude_patterns", "schedule_minutes", "enabled", "keep_last", "keep_daily", "keep_weekly", "keep_monthly", "next_run_at", "last_run_at", "last_status", "created_at", "updated_at"}`.
+- `POST /backup-jobs` takes `{"name", "repository_id", "source_kind": "files"|"media"|"system"|"remote", "source_root"?, "source_path", "source_connection_id"?, "exclude_patterns", "schedule_minutes"?, "enabled", "keep_*", "confirm"}` and returns 201.
+  - `files`: `source_root` must be a managed file root (404 otherwise) and `source_path` an existing folder in it (400). `media`: `source_path` is relative to `NAS_MEDIA_DIR`. `system`: no path; refused unless the database is SQLite. `remote` (pull): needs `source_connection_id` and a *local* repository (400).
+  - `keep_*`: 0–1000 (all 0 keeps every snapshot). Defaults 7 / 7 / 4 / 6.
+  - Enabling a scheduled job, or enabling a job with retention, needs `confirm: true` (400 `confirmation_required` lists the consequences). Lowering a `keep_*` value later needs confirmation too.
+- `PATCH /backup-jobs/{id}` accepts any create field.
+- `DELETE /backup-jobs/{id}` returns 204 (409 while a run is active). The job's snapshots stay and are no longer pruned.
+- `POST /backup-jobs/{id}/run` queues a backup (202); 409 if one is already queued or running.
+
+### Runs
+
+- `GET /backup-runs?repository_id&job_id&limit` returns `[{"id", "repository_id", "job_id", "kind": "backup"|"verify"|"prune"|"restore", "status", "trigger", "dry_run", "cancel_requested", "files", "new_blobs", "reused", "skipped", "errors", "bytes_processed", "bytes_uploaded", "snapshot_id", "error", "created_at", "started_at", "finished_at"}]`, newest first.
+- `GET /backup-runs/{id}` adds `params` and `summary` (problems per file, rejected names, `forget` list and garbage-collection counts for prunes, `replaced` paths and `replaced_dir` for restores, `failed_snapshots` for verifies).
+- `POST /backup-runs/{id}/cancel`: a queued run is cancelled at once, a running one stops after the current file (a cancelled backup writes no snapshot). 409 if already finished. Cancelling a restore needs `backup:restore`.
+
+Status values: `queued`, `running`, `succeeded`, `partial` (some files failed; see `summary.problems`), `failed` (for verify: integrity problems found), `cancelled`.
+
+### Snapshots and restore
+
+- `GET /backup-snapshots/{id}` returns the catalogue row.
+- `GET /backup-snapshots/{id}/entries?prefix=` returns `{"snapshot", "prefix", "total", "truncated", "entries": [{"path", "size", "mtime_ns"}]}`. The manifest is read and decrypted from the repository on demand (at most `NAS_BACKUP_BROWSE_LIMIT` entries).
+- `POST /backup-snapshots/{id}/restore` (`backup:restore`) takes `{"target": {...}, "paths": [], "overwrite": false, "dry_run": false, "confirm": false}` and queues a restore (202).
+  - `target.kind`: `files` (`root`, `path`), `media` (`path` under `NAS_MEDIA_DIR`), `remote` (`connection_id`, `path`) or `staging` (system restore; never overwrites, 400 if `overwrite` is set). Paths are jailed (400 on escape).
+  - `paths` restricts the restore to files or folders of the snapshot (empty: everything).
+  - Existing files are skipped unless `overwrite: true`, which needs `confirm: true` (400 `confirmation_required` otherwise); the old versions are moved to `.nas-backup-replaced/<timestamp>/` in the target folder.
+  - A staged system restore is installed with `python -m app.cli restore-system --run <run id> --yes` (see `BACKUP_AND_RESTORE.md`).
+
+`GET /info` lists the feature `backup`.
+
+Audited (category `backup`): `backup_repository.created/updated/deleted/initialized` (never the passphrase; `passphrase_changed: true` only), `backup_job.created/updated/deleted`, `backup_run.queued/cancel_requested/finished/failed` (actor `backup-worker` for runs it executes), `backup.snapshot_deleted` (retention), `backup.verify_failed`, `backup.restore_replaced` and, from the CLI, `backup.system_restored`.
+
+## Configuration export and import (Phase 12)
+
+Permissions: `config:export` and `config:import` (admin only). Every route is **session only** (API tokens get 403), because a document can carry password hashes and credentials and an import can change any configuration.
+
+- `POST /config/export` takes `{"passphrase": null | "12+ characters"}` and returns the document as a JSON attachment (`Content-Disposition: attachment; filename="nas-manager-config-<timestamp>.json"`):
+
+  ```json
+  {"format": "nas-manager-config", "version": 1, "exported_at": "…Z", "app_version": "0.1.0",
+   "sections": {"settings": {…}, "roles": […], "groups": […], "users": […], "samba_shares": […],
+                "remote_connections": […], "sync_jobs": […], "media_libraries": […],
+                "alert_rules": […], "alert_channels": […], "public_upload_quotas": […],
+                "backup_repositories": […], "backup_jobs": […]},
+   "secrets": null}
+  ```
+
+  - Objects reference each other by name (`users[].groups`, `sync_jobs[].connection`, `backup_jobs[].repository`), never by database id. Only shared media libraries are exported (personal ones belong to their users).
+  - Without a passphrase `secrets` is `null` and objects only list `secret_fields`. With a passphrase `secrets` is `{"kdf": {scrypt parameters}, "sealed": "<base64>"}`: the password hashes, remote credentials, channel secrets and backup passphrases, plus a SHA-256 of `sections`, encrypted with scrypt + AES-256-GCM.
+- `POST /config/import/preview` takes `{"document", "passphrase"?, "mode": "merge"|"replace", "source_name"?}` and returns `{"sections": {name: {"create": [keys], "update": [keys], "delete": [keys], "unchanged": n}}, "warnings": [...], "errors": [{"section", "key", "error"}], "samba_apply_required", "secrets_included"}`. It runs the real import in a transaction that is rolled back, so it changes nothing.
+- `POST /config/import` takes the same body plus `"confirm"` and returns `{"run": {import run}, "plan": {…}}`.
+  - Any invalid object refuses the whole import: 400 `import_invalid` with `details.errors` and `details.plan`; nothing is changed.
+  - A plan with warnings (enabled jobs, objects to delete in `replace` mode, users without passwords, missing credentials, guest shares) needs `confirm: true` (400 `confirmation_required` with `details.warnings`).
+  - A wrong passphrase, missing passphrase for a sealed document, or a document whose `sections` were modified after export returns 400.
+  - The import would leave no administrator, or remove the caller's own administrator access: refused.
+- `GET /config/imports?limit` returns `[{"id", "status": "applied"|"rolled_back", "mode", "source_name", "exported_at", "sections", "warnings", "database_copy", "actor_username", "created_at", "rolled_back_at", "rolled_back_by"}]`, newest first.
+- `POST /config/imports/{id}/rollback` takes `{"confirm": true}` (400 `confirmation_required` without it). Only the most recent applied import can be rolled back (409 otherwise, and for one already rolled back). Returns `{"run", "plan"}`.
+
+Import semantics: `merge` creates and updates; `replace` additionally deletes Samba shares, groups, sync jobs, backup jobs, custom alert rules, alert channels and upload quotas that are missing from a section present in the document. Users, roles, remote connections, backup repositories, shared media libraries and built-in alert rules are never deleted, and the `admin` role's permissions are never changed. Sections absent from the document are left alone. Imported backup repositories must be initialized before use. Users without a password hash in the document are created inactive; existing users (including the caller) take the password hash from a sealed document. Samba shares whose path does not exist are imported disabled, and `smb.conf` is not rewritten (apply it on the Samba page).
+
+Audited (category `config`): `config.exported` (whether secrets were included and object counts), `config.import_previewed`, `config.imported`, `config.import_refused` (outcome `failure`) and `config.rolled_back`. Passphrases and secrets never appear in audit details.
+
 ## Planned
 
-Backups (11), configuration export/import (12). Each phase will extend this document.
+Syslog and comprehensive auditing (13). Each phase will extend this document.

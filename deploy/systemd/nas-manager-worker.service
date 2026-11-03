@@ -1,5 +1,5 @@
 [Unit]
-Description=NAS Manager sync worker (remote and cloud synchronization)
+Description=NAS Manager worker (remote sync, media, monitoring, backups)
 Documentation=file:///opt/nas-manager/docs/INSTALLATION.md
 # The web unit applies schema migrations in its ExecStartPre; the worker
 # refuses to start while the schema is behind, so order it after the web unit.
@@ -42,9 +42,11 @@ Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
 
-# Same sandbox as the web unit. Managed file roots, NAS_MEDIA_DIR and
-# NAS_MEDIA_CACHE_DIR outside /var/lib/nas-manager must be listed here too, e.g.:
-# ReadWritePaths=/srv/nas /srv/media
+# Same sandbox as the web unit. Managed file roots, NAS_MEDIA_DIR,
+# NAS_MEDIA_CACHE_DIR and the backup roots (NAS_BACKUP_LOCAL_ROOTS, Phase 11)
+# outside /var/lib/nas-manager must be listed here too, e.g.:
+# ReadWritePaths=/srv/nas /srv/media /mnt/backup-usb
+# System-state backups read NAS_SAMBA_CONFIG_PATH (world-readable by default).
 NoNewPrivileges=true
 CapabilityBoundingSet=
 AmbientCapabilities=

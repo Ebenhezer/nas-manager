@@ -169,6 +169,14 @@ class FtpProvider(RemoteProvider):
         except _ERRORS as exc:
             raise RemoteError(f"Move failed: {exc}", details={"path": src}) from exc
 
+    def delete(self, path: str) -> None:
+        if self.stat(path) is None:
+            return
+        try:
+            self.ftp.delete(self._abs(path))
+        except _ERRORS as exc:
+            raise RemoteError(f"Delete failed: {exc}", details={"path": path}) from exc
+
 
 def parse_modify(value: str | None) -> datetime | None:
     """MLSD ``modify`` fact: ``YYYYMMDDHHMMSS[.sss]`` in UTC."""

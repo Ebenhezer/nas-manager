@@ -7,6 +7,8 @@ from app.api.v1 import (
     api_tokens,
     audit,
     auth,
+    backups,
+    config_transfer,
     disks,
     files,
     groups,
@@ -55,3 +57,9 @@ api_router.include_router(monitoring.router)
 api_router.include_router(alerts.router)
 api_router.include_router(alerts.rules_router)
 api_router.include_router(alerts.channels_router)
+api_router.include_router(backups.status_router)
+api_router.include_router(backups.repositories_router)
+api_router.include_router(backups.jobs_router)
+api_router.include_router(backups.runs_router)
+api_router.include_router(backups.snapshots_router)
+api_router.include_router(config_transfer.router)

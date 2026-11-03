@@ -246,6 +246,22 @@ class Settings(BaseSettings):
     alert_notify_max_attempts: int = Field(default=5, ge=1, le=50)
     alert_notify_timeout_seconds: int = Field(default=15, ge=1, le=300)
 
+    # ------------------------------------------------------------------
+    # Backup and restore (Phase 11). Backups are encrypted, deduplicated
+    # snapshot repositories on a remote connection or in a directory under
+    # NAS_BACKUP_LOCAL_ROOTS (external disks, second disks, NFS mounts; the
+    # default is <data_dir>/backups). The worker runs every backup, verify,
+    # prune and restore; NAS_BACKUP_STAGING_DIR holds temporary encrypted
+    # blobs, database copies and staged system restores. NAS_BACKUP_SCRYPT_N
+    # is the scrypt cost for *new* repositories and sealed config exports.
+    # ------------------------------------------------------------------
+    backup_local_roots: list[Path] = Field(default_factory=list)
+    backup_staging_dir: Path | None = None
+    backup_lease_seconds: int = Field(default=600, ge=30, le=86400)
+    backup_run_retention_days: int = Field(default=180, ge=1, le=3650)
+    backup_scrypt_n: int = Field(default=2**15, ge=2**10, le=2**20)
+    backup_browse_limit: int = Field(default=2000, ge=10, le=100_000)
+
     @field_validator(
         "data_dir",
         "log_dir",
@@ -259,12 +275,13 @@ class Settings(BaseSettings):
         "ffmpeg_path",
         "ffprobe_path",
         "systemctl_path",
+        "backup_staging_dir",
     )
     @classmethod
     def _absolute(cls, value: Path | None) -> Path | None:
         return None if value is None else value.expanduser().resolve()
 
-    @field_validator("file_roots")
+    @field_validator("file_roots", "backup_local_roots")
     @classmethod
     def _file_roots_absolute(cls, value: list[Path]) -> list[Path]:
         resolved: list[Path] = []
@@ -274,6 +291,13 @@ class Settings(BaseSettings):
                 raise ValueError(f"file root must be an absolute path: {item}")
             resolved.append(absolute)
         return resolved
+
+    @field_validator("backup_scrypt_n")
+    @classmethod
+    def _power_of_two(cls, value: int) -> int:
+        if value & (value - 1):
+            raise ValueError("NAS_BACKUP_SCRYPT_N must be a power of two")
+        return value
 
     @field_validator("session_cookie_name", "csrf_cookie_name")
     @classmethod
@@ -369,6 +393,20 @@ class Settings(BaseSettings):
         return self.data_dir / "media-cache"
 
     @property
+    def resolved_backup_local_roots(self) -> list[Path]:
+        """Directories that may hold local (external storage) repositories."""
+        if self.backup_local_roots:
+            return list(self.backup_local_roots)
+        return [self.data_dir / "backups"]
+
+    @property
+    def resolved_backup_staging_dir(self) -> Path:
+        """Temporary encrypted blobs, database copies and staged restores."""
+        if self.backup_staging_dir is not None:
+            return self.backup_staging_dir
+        return self.data_dir / "backup-staging"
+
+    @property
     def resolved_helper_socket(self) -> Path:
         """Unix socket the privileged helper listens on."""
         if self.helper_socket is not None:
@@ -407,6 +445,9 @@ class Settings(BaseSettings):
         self.resolved_credentials_key_file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.resolved_media_dir.mkdir(parents=True, exist_ok=True, mode=0o750)
         self.resolved_media_cache_dir.mkdir(parents=True, exist_ok=True, mode=0o750)
+        if not self.backup_local_roots:
+            (self.data_dir / "backups").mkdir(parents=True, exist_ok=True, mode=0o750)
+        self.resolved_backup_staging_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
 
 
 @lru_cache

@@ -31,6 +31,8 @@ CATEGORY_UPLOAD = "upload"
 CATEGORY_REMOTE_SYNC = "remote_sync"
 CATEGORY_MEDIA = "media"
 CATEGORY_MONITORING = "monitoring"
+CATEGORY_BACKUP = "backup"
+CATEGORY_CONFIG = "config"
 
 OUTCOME_SUCCESS = "success"
 OUTCOME_FAILURE = "failure"
@@ -160,6 +162,30 @@ ALERT_CHANNEL_DELETED = "alert_channel.deleted"
 ALERT_CHANNEL_TESTED = "alert_channel.tested"
 ALERT_ACKNOWLEDGED = "alert.acknowledged"
 ALERT_NOTIFICATION_FAILED = "alert.notification_failed"
+
+# Backup and restore (Phase 11)
+BACKUP_REPOSITORY_CREATED = "backup_repository.created"
+BACKUP_REPOSITORY_UPDATED = "backup_repository.updated"
+BACKUP_REPOSITORY_DELETED = "backup_repository.deleted"
+BACKUP_REPOSITORY_INITIALIZED = "backup_repository.initialized"
+BACKUP_JOB_CREATED = "backup_job.created"
+BACKUP_JOB_UPDATED = "backup_job.updated"
+BACKUP_JOB_DELETED = "backup_job.deleted"
+BACKUP_RUN_QUEUED = "backup_run.queued"
+BACKUP_RUN_CANCEL_REQUESTED = "backup_run.cancel_requested"
+BACKUP_RUN_FINISHED = "backup_run.finished"
+BACKUP_RUN_FAILED = "backup_run.failed"
+BACKUP_SNAPSHOT_DELETED = "backup.snapshot_deleted"
+BACKUP_VERIFY_FAILED = "backup.verify_failed"
+BACKUP_RESTORE_REPLACED = "backup.restore_replaced"
+BACKUP_SYSTEM_RESTORED = "backup.system_restored"
+
+# Configuration export and import (Phase 12)
+CONFIG_EXPORTED = "config.exported"
+CONFIG_IMPORT_PREVIEWED = "config.import_previewed"
+CONFIG_IMPORTED = "config.imported"
+CONFIG_IMPORT_REFUSED = "config.import_refused"
+CONFIG_ROLLED_BACK = "config.rolled_back"
 
 
 class RequestContext(TypedDict):

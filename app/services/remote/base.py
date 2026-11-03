@@ -152,6 +152,15 @@ class RemoteProvider(ABC):
     def move(self, src: str, dst: str) -> None:
         """Rename ``src`` to ``dst`` (used to archive, never to delete)."""
 
+    @abstractmethod
+    def delete(self, path: str) -> None:
+        """Remove the *file* at ``path`` (a missing file is not an error).
+
+        Only backup retention and garbage collection call this (Phase 11),
+        and only for files inside a backup repository it created. Remote
+        sync never deletes; it archives with ``move``.
+        """
+
     def dir_exists(self, path: str) -> bool:
         """Whether ``path`` is an existing directory (the base always is)."""
         if not path:

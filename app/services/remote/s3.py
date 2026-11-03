@@ -195,6 +195,12 @@ class S3Provider(RemoteProvider):
         except _ERRORS as exc:
             raise RemoteError(f"Move failed: {_describe(exc)}", details={"path": src}) from exc
 
+    def delete(self, path: str) -> None:
+        try:
+            self.client.delete_object(Bucket=self.bucket, Key=self._key(path))
+        except _ERRORS as exc:
+            raise RemoteError(f"Delete failed: {_describe(exc)}", details={"path": path}) from exc
+
 
 def _addressing_style(value: Any) -> Literal["auto", "path", "virtual"]:
     if value == "path":

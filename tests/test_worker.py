@@ -364,3 +364,59 @@ def test_prune_covers_samples(worker: Worker, db: Database, quiet_host: None) ->
     with db.session_factory() as session:
         stamps = session.execute(select(MetricSample.sampled_at)).scalars().all()
         assert stamps and all(s > utcnow_naive() - timedelta(days=1) for s in stamps)
+
+
+def test_scheduled_backup_runs_on_the_backup_pool(
+    worker: Worker, db: Database, migrated_settings: Settings
+) -> None:
+    from app.core.secrets import CredentialCipher
+    from app.models import BackupRun, BackupSnapshot, User
+    from app.services.backup import jobs as backup_jobs
+    from app.services.bootstrap_service import bootstrap_admin
+
+    source = migrated_settings.resolved_file_roots[0] / "photos"
+    source.mkdir()
+    (source / "a.jpg").write_bytes(b"jpeg")
+    cipher = CredentialCipher.from_settings(migrated_settings)
+    with db.session_factory() as session:
+        bootstrap_admin(session, username="admin", password="x" * 12, settings=migrated_settings)
+        admin = session.execute(select(User)).scalar_one()
+        repo = backup_jobs.create_repository(
+            session,
+            migrated_settings,
+            cipher,
+            values={
+                "name": "usb",
+                "target_kind": "local",
+                "local_root": str(migrated_settings.resolved_backup_local_roots[0]),
+                "repo_path": "r",
+                "passphrase": "worker passphrase",
+            },
+            actor=admin,
+        )
+        backup_jobs.initialize_repository(session, migrated_settings, cipher, repo, actor=admin)
+        backup_jobs.create_job(
+            session,
+            migrated_settings,
+            values={
+                "name": "photos",
+                "repository_id": repo.id,
+                "source_kind": "files",
+                "source_root": str(migrated_settings.resolved_file_roots[0]),
+                "source_path": "photos",
+                "schedule_minutes": 60,
+                "enabled": True,
+            },
+            confirm=True,
+            actor=admin,
+        )
+    worker.tick()
+    worker.wait_idle()
+    with db.session_factory() as session:
+        run = session.execute(select(BackupRun)).scalar_one()
+        assert run.trigger == "schedule" and run.status == RUN_SUCCEEDED, run.error
+        assert session.execute(select(BackupSnapshot)).scalar_one().file_count == 1
+    worker.tick()  # not due again for an hour
+    worker.wait_idle()
+    with db.session_factory() as session:
+        assert len(session.execute(select(BackupRun)).scalars().all()) == 1

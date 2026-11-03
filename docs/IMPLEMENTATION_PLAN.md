@@ -16,9 +16,9 @@ Status legend: **Done** (implemented and verified), **Next**, **Planned**.
 | 8 | Photo gallery and personal media libraries | **Done** |
 | 9 | Video playback and streaming | **Done** |
 | 10 | System monitoring and alerting | **Done** |
-| 11 | Backup and restore | **Next** |
-| 12 | Configuration export and import | Planned |
-| 13 | Syslog and comprehensive auditing | Planned |
+| 11 | Backup and restore | **Done** |
+| 12 | Configuration export and import | **Done** |
+| 13 | Syslog and comprehensive auditing | **Next** |
 | 14 | Security hardening, deployment testing, documentation | Planned |
 
 ## Phase 1: completed
@@ -200,6 +200,21 @@ Delivered:
 42. **No command lines in the process list.** They routinely carry secrets, and the list is visible to operators.
 43. **A dead worker is reported, not notified.** The web process adds a synthetic `worker_offline` entry to the alert summary from the heartbeat. Notifying about the worker's own death would need an independent watchdog, which is out of scope.
 
+44. **Backups are snapshots over a content-addressed store, encrypted on the NAS.** A repository is self-describing (`repo.json`, sealed manifests, sealed blobs), so it can be read without the database (`backup-recover`). Identical content is stored once; unchanged files are not even re-read. No external backup tool (restic/borg) was adopted: their binaries would be a new runtime dependency outside the pinned Python set and could not reuse the provider layer (SFTP, FTP, WebDAV, S3, Drive) and its pinned-host-key and TLS rules.
+45. **Crypto from the already-pinned `cryptography` package.** scrypt → HKDF → AES-256-GCM in authenticated 4 MiB segments; blob names are keyed HMACs. The passphrase is required (no unencrypted repositories) and stored Fernet-encrypted so schedules can run; it is never returned, logged or audited.
+46. **`delete` exists, but only inside repositories.** Retention needs it. It is a provider method that sync never calls; garbage collection refuses to run unless every snapshot is readable; deleting a repository or job in the app never touches the target.
+47. **A repository is never created implicitly.** Only *Initialize* creates one, only in an empty or new folder; an existing repository is adopted when the passphrase unlocks it. A missing `repo.json` fails a run, so an unmounted disk cannot silently receive backups on the root filesystem.
+48. **Restores never delete and never overwrite by default.** New folder by default; `overwrite` needs `confirm` and moves old versions to `.nas-backup-replaced/`. Every file is verified against its SHA-256 before an atomic rename.
+49. **The live database is never replaced by the running app.** System snapshots are staged with checksums and installed by a CLI command with the services stopped, keeping the previous files.
+50. **One run per repository; one backup-related run per worker.** The claim `UPDATE` requires no other running run on the same repository, so garbage collection can never race a backup still uploading blobs. Backups get their own single-thread pool so they never take sync slots.
+51. **Pull backups store into local repositories only.** "Bidirectional" in the master plan is push (NAS → target) plus pull (remote → NAS); a pull into another remote would make the NAS a mere relay.
+52. **Configuration documents use natural keys and are self-contained.** References are by name, so a document can be applied to another installation. Only plain configuration is exported; runtime state and user content (albums, personal libraries, history) are not.
+53. **Secrets travel only sealed.** Without a passphrase an export has no secrets at all; with one they are sealed with the backup crypto together with a digest of the sections, which doubles as tamper detection.
+54. **Import is one transaction that reuses validators, not services.** The per-object services commit on their own, so the importer writes rows directly after running the same validators. The preview is the import rolled back, so it cannot disagree with the real run.
+55. **Rollback is logical, not a file swap.** The running application never replaces its own database. Each import stores an encrypted pre-import snapshot; rollback deletes what the import created and re-applies the snapshot in one transaction. A file copy of the database is kept as well, for manual recovery.
+56. **Imports never delete accounts or data-bearing objects.** `replace` deletes only plain configuration; users, roles, connections, repositories and libraries must be removed deliberately in the UI. Missing secrets downgrade gracefully (inactive users, credentials to re-enter, skipped repositories) instead of failing.
+57. **`smb.conf` is not written by an import.** The deviation from the plan (apply Samba after commit) keeps one write path for `smb.conf`, the Samba page, with `testparm`, a backup and the helper. The import result reports `samba_apply_required`.
+
 ## Known limitations
 
 - The management UI (including the gallery and video player) was exercised via TestClient and curl, not a real browser.
@@ -208,6 +223,8 @@ Delivered:
 - The per-IP login limiter is in-process (single process; resets on restart). The account lockout is persistent in the database.
 - The bearer-failure throttle and the per-upload resumable lock are in-process; a multi-process deployment needs shared state for both.
 - The sync journal records only changes made through the application; edits over Samba or directly on disk are not journaled (clients should re-list periodically).
+- Configuration import (Phase 12): only the most recent import can be rolled back, and changes made after it to the same objects are overwritten by the rollback; `replace` mode never deletes users, roles, connections, repositories or libraries; documents from other app versions are refused (format version 1 only); the import does not apply `smb.conf` (use the Samba page); personal media libraries and albums are not part of the configuration.
+- Backups (Phase 11): SQLite only for system-state jobs; no bandwidth limit, partial-file resume or content compression; no filesystem snapshots (files changing during a backup may be captured mid-write); changing a passphrase in the app does not re-key the repository; no built-in alert rule for verify failures (audited and shown on the Backups page); one backup-related run at a time per worker; snapshots of deleted jobs are never pruned automatically; browsing a snapshot downloads and decrypts its manifest in the web process (capped listing).
 - Monitoring (Phase 10): a stopped worker cannot notify, including about itself; the UI shows it. History is sampled, by default once a minute, and kept 7 days, so there is no per-second resolution or long-term trending. Disk usage is sampled for the data directory and the managed file roots only (other mounts appear in Disks). Process CPU % is measured between page refreshes. SMART polling needs the helper. Only email and webhook channels exist (no SMS or push app). Alert rules are global, with no per-user subscriptions or quiet hours. Deleting a channel drops notifications still queued for it.
 - The sync worker is a single process (`NAS_WORKER_CONCURRENCY` threads); several workers on one database are safe (atomic claims, leases) but were only exercised as one process. Resumable-upload expiry and file-journal pruning still run on request; media journal and cache pruning run in the worker.
 - Remote sync limitations (Phase 7): empty directories are not synced; renames are seen as a new file plus a deletion (so with `delete_policy=ignore` the old name stays on the other side); files changed outside the sync between scan and transfer are skipped until the next run; FTP needs `MLSD`; Google Drive skips Google-native documents and duplicate names; there is no bandwidth limit, no per-file size cap and no partial-file resume for remote transfers (an interrupted file restarts); the credentials key cannot be rotated yet.
@@ -451,3 +468,65 @@ Delivered:
 - **No real RAID array or SMART hardware**: mdstat and smartctl came from fixtures, and SMART from a mocked helper.
 - PostgreSQL is still not exercised.
 
+
+## Phase 11: completed
+
+Delivered:
+
+- **Backup package** (`app/services/backup/`): `crypto` (scrypt → HKDF → AES-256-GCM in authenticated 4 MiB segments, keyed blob names), `repository` (self-describing on-target format: `repo.json`, sealed snapshot manifests, content-addressed sealed blobs; explicit initialize/adopt), `sources` (file-root folders, media libraries, system state with a consistent SQLite copy + credentials key + `smb.conf`, and remote folders for pull backups), `engine` (backup with parent-snapshot reuse and dedup, full/quick verify that rebuilds the catalogue and blob cache, keep-last/daily/weekly/monthly retention with safe garbage collection, restore with temp file → checksum → atomic rename and `.nas-backup-replaced/`), `jobs` (CRUD, queueing, per-repository exclusive claiming, leases, scheduling, run processing).
+- **Targets:** every Phase 7 provider (SFTP, FTP/FTPS, WebDAV, S3, Google Drive) plus a jailed `LocalProvider` for external storage under `NAS_BACKUP_LOCAL_ROOTS`. Providers gained `delete` (Drive: trash), used only by backup retention and GC.
+- **Directions:** push (NAS → repository) and pull (remote server → local repository); restores to file roots, media libraries, remote connections or a staging area.
+- **Worker:** a single-thread *backup* pool, scheduled backups, lease renewal/reclaim, hourly pruning of backup run history.
+- **CLI:** `restore-system --run <id> --yes` (installs a staged system snapshot with the services stopped, keeping `*.before-restore-*` files, then migrates) and `backup-recover --repo-dir` (lists or restores snapshots straight from a repository directory; disaster recovery).
+- **Migration `0011`:** `backup_repositories`, `backup_jobs`, `backup_runs`, `backup_snapshots`, `backup_blobs`; permissions `backup:read` (admin, operator), `backup:write`, `backup:restore` (admin).
+- **API:** `/backup/status`, `/backup-repositories` (CRUD, `init`, `verify`, `prune`, `snapshots`), `/backup-jobs` (CRUD, `run`), `/backup-runs` (list, detail, cancel), `/backup-snapshots` (detail, `entries`, `restore`); `/info` feature `backup`. Passphrase endpoints are session-only; risky actions use `confirmation_required`.
+- **UI:** a **Backups** page (repositories, jobs, snapshots with browse and restore dialog, recent runs) gated on `backup:read`, CSP-compatible.
+- **Config/deploy:** `NAS_BACKUP_*` in both env templates; the worker unit documents `ReadWritePaths` for backup roots.
+- **Docs:** `BACKUP_AND_RESTORE.md` rewritten (concepts, format, setup, retention, verification, restore, system restore, disaster recovery, limitations).
+
+### Verification (executed in this workspace, Python 3.12.3, Ubuntu 24.04 on WSL2)
+
+| Check | Result |
+|-------|--------|
+| `pytest` | 726 passed, 1 skipped (661 after Phase 10; +65 in `test_backup_crypto.py`, `test_backup_engine.py`, `test_backup_api.py`, plus additions to `test_worker.py` and `test_migrations.py`). The skip is the unreadable-file test, which cannot work as root. |
+| `ruff check` / `ruff format --check` / `mypy` (strict, 199 source files) | clean |
+| Migrations | head `0011`; downgrade to `0010` removes the tables and grants, re-upgrade restores them; model/migration drift check passes |
+| Crypto | round trips at segment boundaries; wrong key, flipped byte, truncation, segment reordering, trailing data, bad header and hostile scrypt parameters are rejected |
+| Engine | dedup across files and runs; unchanged files reused; partial runs; cancelled runs leave no snapshot; missing source, wrong passphrase and unmounted target fail cleanly; verify detects corrupted and missing blobs and rebuilds the catalogue; retention buckets; prune dry run; GC refuses with an unreadable snapshot; restores into new folders, selected paths, in place with replacement archiving, to a remote, and from a crafted manifest with `..`/absolute paths (refused); tampered blobs are not restored; claim exclusivity per repository; scheduling and lease reclaim; both recovery CLI commands |
+| Live run (`python -m app` + `python -m app.worker`, scratch data dir, real scrypt cost, loopback SFTP server) | 30/30 checks: local and SFTP repositories, push backup with dedup, second run fully reused, encrypted repository content, browse, restore byte-identical, overwrite with confirmation and archiving, retention, system-state backup and staged restore, pull from SFTP, push to SFTP + full verify, restore to SFTP, corrupted blob detected, prune preview, API token refused. Then `restore-system` (refused without `--yes`, installed with it; the restarted app showed the backup-time jobs and the audit event) and `backup-recover` (listed snapshots, restored a pull snapshot identical to the SFTP source). No passphrase in the database, WAL, logs or repository; only INFO log lines. |
+
+### Not verified
+
+- **No real browser:** the Backups page was checked over HTTP only, and the JavaScript was not syntax-checked (no Node runtime).
+- **No real cloud providers:** S3, WebDAV, FTP and Google Drive were not used as backup targets; `delete` for those providers is untested against real servers. SFTP was a loopback stub.
+- **No real external disk, systemd sandbox or hardware loss:** `ReadWritePaths` and the `nas-manager` account's access were not exercised.
+- Large data sets (many GB, hundreds of thousands of files) and scrypt cost on slow NAS CPUs are unmeasured.
+
+## Phase 12: completed
+
+Delivered:
+
+- **Export** (`app/services/config_transfer/export.py`): settings, roles, groups, users, Samba shares, remote connections, sync jobs, shared media libraries, alert rules and channels, upload quotas, backup repositories and jobs, keyed by name. Secrets (password hashes, credentials, channel secrets, backup passphrases) are omitted, or sealed with a passphrase together with a digest of the sections.
+- **Import** (`importer.py`): `preview` and `apply` run the same code in one transaction (preview always rolls back). Supports `merge` and `replace` modes. Every value is validated with the existing validators, all problems are reported at once and the import is all-or-nothing. Warnings need confirmation. Administrator protection is enforced. Deactivated users lose their sessions and tokens. Imported repositories start uninitialized, and shares with missing paths are imported disabled.
+- **Rollback**: each applied import stores a Fernet-encrypted pre-import snapshot and an SQLite copy of the database (last 10 kept). Rolling back the latest import deletes what it created and re-applies the snapshot in one transaction.
+- **Migration `0012`:** `config_import_runs`; permissions `config:export`, `config:import` (admin).
+- **API:** `POST /config/export`, `POST /config/import/preview`, `POST /config/import`, `GET /config/imports`, `POST /config/imports/{id}/rollback`, all session-only. `/info` gains the feature `config_transfer`. New audit category `config`.
+- **UI:** a **Configuration** page (export with an optional passphrase, file import with a preview table, warnings and errors, and import history with rollback).
+- **Docs:** API, architecture, security, backup/restore (configuration section), master plan.
+
+### Verification (executed in this workspace, Python 3.12.3, Ubuntu 24.04 on WSL2)
+
+| Check | Result |
+|-------|--------|
+| `pytest` | 739 passed, 1 skipped (726 after Phase 11; +12 in `test_config_transfer.py`, +1 migration test) |
+| `ruff check` / `ruff format --check` / `mypy` (strict, 206 source files) | clean |
+| Migrations | head `0012`; downgrade to `0011` and re-upgrade, with grants checked; drift check passes |
+| Tests | export without a passphrase has no secrets; sealed export round trip; full round trip into a second installation with identical resulting configuration (and the imported user can log in); idempotent re-import; wrong or missing passphrase; tampered sections; envelope and per-object validation (any error refuses everything and is audited); last-admin and own-admin protection; users without hashes are inactive; missing share paths are disabled; replace mode deletes only plain configuration and needs confirmation; rollback restores the exact prior state; only the latest import can be rolled back; operator, anonymous and API-token access refused |
+| Live run (two `python -m app` instances: a source with the Phase 11 data and a fresh target) | 20/20 checks: export with and without a passphrase, wrong passphrase refused, preview, confirmation required, import applied, target configuration identical to the source, the imported user logs in, `smb.conf` not written, rollback restores the original target, history shows the rollback, page renders, no plaintext secrets anywhere in the target data dir. Logs: INFO lines only, no tracebacks. |
+
+### Not verified
+
+- **No real browser:** the Configuration page (file picker, download through a blob URL) was checked over HTTP only.
+- **Cross-version imports** are untested (only format version 1 exists).
+- **Imports into PostgreSQL** are untested.
+- **Large documents** (thousands of users) are untested; they are capped at 10,000 objects per section.

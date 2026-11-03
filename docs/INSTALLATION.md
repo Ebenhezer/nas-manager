@@ -101,10 +101,10 @@ Sync jobs run in a separate worker process under the same unprivileged account. 
 
 ```bash
 sudo cp deploy/systemd/nas-manager-worker.service /etc/systemd/system/
-# Managed file roots outside /var/lib/nas-manager must also be writable by the
-# worker: add them with `sudo systemctl edit nas-manager-worker` →
+# Managed file roots and backup roots outside /var/lib/nas-manager must also be
+# writable by the worker: add them with `sudo systemctl edit nas-manager-worker` →
 #   [Service]
-#   ReadWritePaths=/srv/nas
+#   ReadWritePaths=/srv/nas /mnt/backup-usb/nas-manager
 sudo systemctl daemon-reload
 sudo systemctl enable --now nas-manager-worker
 journalctl -u nas-manager-worker -n 50 --no-pager
@@ -115,6 +115,27 @@ journalctl -u nas-manager-worker -n 50 --no-pager
 - **SFTP:** use **Fetch host key** in the connection form and compare the fingerprint with the server (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the server) before trusting it.
 - **Google Drive:** in Google Cloud Console create an OAuth client of type *Web application* with the redirect URI `https://<your NAS URL>/api/v1/remotes/oauth/callback` (enable the Google Drive API for the project). Set `NAS_PUBLIC_BASE_URL=https://<your NAS URL>` in `/etc/nas-manager/nas-manager.env`, restart `nas-manager`, create a Google Drive connection with the client id and secret, then click **Connect** and grant access. The scope is full Drive access (`https://www.googleapis.com/auth/drive`) so existing folders can be synced. The callback identifies you by your session cookie, which the browser only sends on Google's redirect with `NAS_SESSION_COOKIE_SAMESITE=lax` (the default); with `strict` the callback answers 401.
 - Create jobs disabled, run **Preview** (a dry run that lists every planned action), and only then **Run now** or enable a schedule.
+
+### Backups (Phase 11)
+
+Backups run in the same worker. Decide where repositories live:
+
+- **External storage:** mount the backup disk (the Disks page, or your own `/etc/fstab` entry with `nofail`), create a folder owned by the service account and allow it:
+
+  ```bash
+  sudo install -d -o nas-manager -g nas-manager -m 0750 /mnt/backup-usb/nas-manager
+  # /etc/nas-manager/nas-manager.env
+  NAS_BACKUP_LOCAL_ROOTS=["/mnt/backup-usb/nas-manager"]
+  # the worker must be able to write there:
+  sudo systemctl edit nas-manager-worker    # [Service] ReadWritePaths=/mnt/backup-usb/nas-manager
+  sudo systemctl restart nas-manager nas-manager-worker
+  ```
+
+  Point the root at a folder *on* the disk (not the bare mountpoint) so an unmounted disk shows up as a missing directory and the backup fails instead of writing to the root filesystem.
+- **Remote:** create a remote connection first (Remote sync page), with an account limited to the backup folder or bucket. Retention needs delete rights there; Google Drive moves pruned files to the trash.
+- Without configuration, repositories can only go to `/var/lib/nas-manager/backups` (same disk as the data).
+
+Then create repositories and jobs on the **Backups** page, store each passphrase safely, and run a first backup and a **Verify**. Staging space (`NAS_BACKUP_STAGING_DIR`, default `/var/lib/nas-manager/backup-staging`) needs room for the largest single file being backed up or restored and for a copy of the database. Restores and disaster recovery: `BACKUP_AND_RESTORE.md`.
 
 ### Photo gallery and video (Phases 8–9)
 

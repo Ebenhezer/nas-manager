@@ -382,6 +382,25 @@ class GoogleDriveProvider(RemoteProvider):
         self._ids.pop(src, None)
         self._ids[dst] = found
 
+    def delete(self, path: str) -> None:
+        """Move the file to the Drive trash (recoverable for 30 days)."""
+        found = self._resolve(path)
+        if found is None:
+            return
+        if found[1] == FOLDER_MIME:
+            raise RemoteError("Refusing to delete a folder", details={"path": path})
+        self._check(
+            self._request(
+                "PATCH",
+                f"{API_URL}/files/{found[0]}",
+                params={"supportsAllDrives": "true", "fields": "id"},
+                json={"trashed": True},
+            ),
+            "delete",
+            path,
+        )
+        self._ids.pop(path, None)
+
 
 def _raw(name: str, item: dict[str, Any], problem: str | None) -> RawEntry:
     md5 = item.get("md5Checksum")

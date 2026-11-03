@@ -35,6 +35,11 @@ PERMISSIONS: list[str] = [
     "media:read",
     "media:write",
     "media:admin",
+    "backup:read",
+    "backup:write",
+    "backup:restore",
+    "config:export",
+    "config:import",
 ]
 
 ALL_PERMISSIONS: frozenset[str] = frozenset(PERMISSIONS)
@@ -45,6 +50,7 @@ ROLE_DESCRIPTIONS: dict[str, str] = {
         "Read access to users, groups, roles, audit log, system, settings, public upload usage"
         ", API token metadata, remote sync status (never remote credentials)"
         " and system monitoring and alerts (view only)"
+        ", backup repositories, jobs, runs and snapshots (view only; never restore)"
         "; their own photo and video library."
     ),
     "viewer": "Read-only access to the dashboard; their own photo and video library.",
@@ -66,6 +72,7 @@ ROLE_DEFAULT_PERMISSIONS: dict[str, list[str]] = {
         "remotes:read",
         "media:read",
         "media:write",
+        "backup:read",
     ],
     "viewer": ["dashboard:read", "media:read", "media:write"],
 }

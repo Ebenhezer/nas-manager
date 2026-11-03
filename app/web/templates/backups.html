@@ -1,0 +1,306 @@
+{% extends "base.html" %}
+{% block title %}Backups · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
+  <h1 class="h3 mb-0">Backups</h1>
+  <span id="worker-badge" class="badge text-bg-secondary">checking…</span>
+</div>
+<div id="error-banner" class="alert alert-danger d-none" role="alert"></div>
+<div id="info-banner" class="alert alert-info d-none" role="status"></div>
+
+<div id="backups-root"
+     data-can-write="{{ 'true' if can('backup:write') else 'false' }}"
+     data-can-restore="{{ 'true' if can('backup:restore') else 'false' }}"
+     data-can-remotes="{{ 'true' if can('remotes:read') else 'false' }}">
+
+  <div class="card mb-4">
+    <div class="card-header d-flex align-items-center justify-content-between">
+      <span>Repositories</span>
+      {% if can('backup:write') %}
+      <button type="button" class="btn btn-sm btn-primary" id="add-repository">Add repository</button>
+      {% endif %}
+    </div>
+    {% if can('backup:write') %}
+    <form id="repository-form" class="card-body border-bottom d-none" novalidate>
+      <p class="small text-body-secondary">
+        Backups are encrypted with the passphrase before they leave this NAS. Keep a copy of the
+        passphrase somewhere safe: <strong>without it the backups cannot be restored.</strong>
+      </p>
+      <div class="row g-2">
+        <div class="col-12 col-md-4">
+          <label class="form-label" for="repo-name">Name</label>
+          <input class="form-control" id="repo-name" maxlength="64" required>
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label" for="repo-kind">Target</label>
+          <select class="form-select" id="repo-kind">
+            <option value="local">External storage (local folder)</option>
+            <option value="remote">Remote connection</option>
+          </select>
+        </div>
+        <div class="col-12 col-md-4" id="repo-root-group">
+          <label class="form-label" for="repo-root">Backup root</label>
+          <select class="form-select" id="repo-root"></select>
+        </div>
+        <div class="col-12 col-md-4 d-none" id="repo-connection-group">
+          <label class="form-label" for="repo-connection">Connection</label>
+          <select class="form-select" id="repo-connection"></select>
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label" for="repo-path">Folder</label>
+          <input class="form-control" id="repo-path" maxlength="4096" placeholder="nas-backups">
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label" for="repo-passphrase">Passphrase</label>
+          <input class="form-control" id="repo-passphrase" type="password" minlength="12" autocomplete="new-password" required>
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label" for="repo-passphrase2">Repeat passphrase</label>
+          <input class="form-control" id="repo-passphrase2" type="password" minlength="12" autocomplete="new-password" required>
+        </div>
+      </div>
+      <div class="mt-3">
+        <button type="submit" class="btn btn-primary">Save and initialize</button>
+        <button type="button" class="btn btn-outline-secondary" id="repository-cancel">Cancel</button>
+      </div>
+    </form>
+    {% endif %}
+    <div class="table-responsive">
+      <table class="table table-striped align-middle mb-0">
+        <thead>
+          <tr><th>Name</th><th>Target</th><th>Initialized</th><th>Last verify</th><th class="text-end">Actions</th></tr>
+        </thead>
+        <tbody id="repositories-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card mb-4">
+    <div class="card-header d-flex align-items-center justify-content-between">
+      <span>Jobs</span>
+      {% if can('backup:write') %}
+      <button type="button" class="btn btn-sm btn-primary" id="add-job">Add job</button>
+      {% endif %}
+    </div>
+    {% if can('backup:write') %}
+    <form id="job-form" class="card-body border-bottom d-none" novalidate>
+      <div class="row g-2">
+        <div class="col-12 col-md-4">
+          <label class="form-label" for="job-name">Name</label>
+          <input class="form-control" id="job-name" maxlength="64" required>
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label" for="job-repository">Repository</label>
+          <select class="form-select" id="job-repository"></select>
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label" for="job-source">What to back up</label>
+          <select class="form-select" id="job-source">
+            <option value="files">A folder in a file root (push)</option>
+            <option value="media">Photo and video libraries (push)</option>
+            <option value="system">System state: database, key, Samba config (push)</option>
+            <option value="remote">A folder on a remote server (pull)</option>
+          </select>
+        </div>
+        <div class="col-12 col-md-4" id="job-root-group">
+          <label class="form-label" for="job-root">File root</label>
+          <select class="form-select" id="job-root"></select>
+        </div>
+        <div class="col-12 col-md-4 d-none" id="job-connection-group">
+          <label class="form-label" for="job-connection">Remote connection</label>
+          <select class="form-select" id="job-connection"></select>
+        </div>
+        <div class="col-12 col-md-4" id="job-path-group">
+          <label class="form-label" for="job-path">Folder</label>
+          <input class="form-control" id="job-path" maxlength="4096">
+        </div>
+        <div class="col-12 col-md-8">
+          <label class="form-label" for="job-excludes">Exclude patterns (one per line)</label>
+          <textarea class="form-control" id="job-excludes" rows="2"></textarea>
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label" for="job-schedule">Every (minutes)</label>
+          <input class="form-control" id="job-schedule" type="number" min="1" max="44640">
+        </div>
+        <div class="col-6 col-md-2 d-flex align-items-end">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="job-enabled">
+            <label class="form-check-label" for="job-enabled">Enabled</label>
+          </div>
+        </div>
+        <div class="col-12"><span class="form-label">Keep snapshots (0 = rule off; all 0 keeps everything)</span></div>
+        <div class="col-6 col-md-3">
+          <label class="form-label small" for="job-keep-last">Last</label>
+          <input class="form-control" id="job-keep-last" type="number" min="0" max="1000" value="7">
+        </div>
+        <div class="col-6 col-md-3">
+          <label class="form-label small" for="job-keep-daily">Daily</label>
+          <input class="form-control" id="job-keep-daily" type="number" min="0" max="1000" value="7">
+        </div>
+        <div class="col-6 col-md-3">
+          <label class="form-label small" for="job-keep-weekly">Weekly</label>
+          <input class="form-control" id="job-keep-weekly" type="number" min="0" max="1000" value="4">
+        </div>
+        <div class="col-6 col-md-3">
+          <label class="form-label small" for="job-keep-monthly">Monthly</label>
+          <input class="form-control" id="job-keep-monthly" type="number" min="0" max="1000" value="6">
+        </div>
+      </div>
+      <div class="mt-3">
+        <button type="submit" class="btn btn-primary">Save job</button>
+        <button type="button" class="btn btn-outline-secondary" id="job-cancel">Cancel</button>
+      </div>
+    </form>
+    {% endif %}
+    <div class="table-responsive">
+      <table class="table table-striped align-middle mb-0">
+        <thead>
+          <tr><th>Name</th><th>Direction</th><th>Source</th><th>Repository</th><th>Schedule</th><th>Retention</th><th>Last run</th><th class="text-end">Actions</th></tr>
+        </thead>
+        <tbody id="jobs-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card mb-4">
+    <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2">
+      <span>Snapshots</span>
+      <select class="form-select form-select-sm w-auto" id="snapshot-repository" aria-label="Repository"></select>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-sm table-striped align-middle mb-0">
+        <thead>
+          <tr><th>Taken</th><th>Job</th><th>Source</th><th>Files</th><th>Size</th><th>Verified</th><th class="text-end">Actions</th></tr>
+        </thead>
+        <tbody id="snapshots-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card mb-4">
+    <div class="card-header">Recent runs</div>
+    <div class="table-responsive">
+      <table class="table table-sm table-striped align-middle mb-0">
+        <thead>
+          <tr><th>#</th><th>Kind</th><th>Status</th><th>Files</th><th>New / reused</th><th>Data</th><th>Started</th><th>Result</th><th class="text-end"></th></tr>
+        </thead>
+        <tbody id="runs-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="confirm-modal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="confirm-modal-title">Confirm</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div id="confirm-modal-plan" class="mb-2 text-break"></div>
+        <ul id="confirm-modal-warnings" class="small text-danger mb-0"></ul>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirm-modal-accept">Confirm</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="browse-modal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="browse-modal-title">Snapshot</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <form id="browse-form" class="input-group input-group-sm mb-2">
+          <input class="form-control" id="browse-prefix" placeholder="Folder (empty for everything)" aria-label="Folder">
+          <button class="btn btn-outline-secondary" type="submit">Show</button>
+        </form>
+        <p id="browse-summary" class="small text-body-secondary"></p>
+        <div class="table-responsive">
+          <table class="table table-sm mb-0">
+            <thead><tr><th>Path</th><th class="text-end">Size</th></tr></thead>
+            <tbody id="browse-body"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if can('backup:restore') %}
+<div class="modal fade" id="restore-modal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <form class="modal-content" id="restore-form" novalidate>
+      <div class="modal-header">
+        <h5 class="modal-title" id="restore-modal-title">Restore</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p class="small text-body-secondary">
+          Files are restored into a new folder by default. Existing files are never replaced
+          unless you tick <em>Replace existing files</em>; the current versions are then moved
+          into <code>.nas-backup-replaced/</code> first.
+        </p>
+        <div class="row g-2">
+          <div class="col-12 col-md-4">
+            <label class="form-label" for="restore-kind">Restore to</label>
+            <select class="form-select" id="restore-kind">
+              <option value="files">A folder in a file root</option>
+              <option value="media">The media libraries</option>
+              <option value="remote">A remote connection</option>
+              <option value="staging">Staging (system restore)</option>
+            </select>
+          </div>
+          <div class="col-12 col-md-4" id="restore-root-group">
+            <label class="form-label" for="restore-root">File root</label>
+            <select class="form-select" id="restore-root"></select>
+          </div>
+          <div class="col-12 col-md-4 d-none" id="restore-connection-group">
+            <label class="form-label" for="restore-connection">Connection</label>
+            <select class="form-select" id="restore-connection"></select>
+          </div>
+          <div class="col-12 col-md-4" id="restore-path-group">
+            <label class="form-label" for="restore-path">Folder</label>
+            <input class="form-control" id="restore-path" maxlength="4096">
+          </div>
+          <div class="col-12">
+            <label class="form-label" for="restore-paths">Only these files or folders (one per line; empty restores everything)</label>
+            <textarea class="form-control" id="restore-paths" rows="3"></textarea>
+          </div>
+          <div class="col-12">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" id="restore-overwrite">
+              <label class="form-check-label" for="restore-overwrite">Replace existing files</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" id="restore-dry-run">
+              <label class="form-check-label" for="restore-dry-run">Preview only (dry run)</label>
+            </div>
+          </div>
+        </div>
+        <p class="small text-body-secondary mt-2 mb-0 d-none" id="restore-staging-hint">
+          A staged system restore is installed from the command line with the services stopped:
+          <code>python -m app.cli restore-system --run &lt;run id&gt; --yes</code>.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary">Queue restore</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script type="module" src="{{ url_for('static', path='js/backups.js') }}"></script>
+{% endblock %}

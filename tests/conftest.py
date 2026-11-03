@@ -28,6 +28,7 @@ def settings(tmp_path: Path) -> Settings:
         argon2_time_cost=1,
         argon2_memory_cost=64,
         argon2_parallelism=1,
+        backup_scrypt_n=1024,
     )
 
 

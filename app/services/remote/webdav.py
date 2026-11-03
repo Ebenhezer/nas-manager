@@ -197,6 +197,13 @@ class WebDavProvider(RemoteProvider):
                 f"WebDAV MOVE returned HTTP {response.status_code}", details={"path": src}
             )
 
+    def delete(self, path: str) -> None:
+        response = self._request("DELETE", self._href(path))
+        if response.status_code not in (200, 204, 404):
+            raise RemoteError(
+                f"WebDAV DELETE returned HTTP {response.status_code}", details={"path": path}
+            )
+
 
 def _iter_file(source: BinaryIO) -> Any:
     while chunk := source.read(_CHUNK):

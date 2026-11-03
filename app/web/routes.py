@@ -287,6 +287,30 @@ def alerts_page(
     return templates.TemplateResponse(request, "alerts.html", _page_context(request, current))
 
 
+@router.get("/config", response_class=HTMLResponse)
+def config_page(
+    request: Request, current: CurrentUser | None = Depends(resolve_web_user)
+) -> Response:
+    redirect = _protected(current)
+    if redirect is not None:
+        return redirect
+    if current is None or not {"config:export", "config:import"} & current.permissions:
+        raise UnauthorizedError("Missing required permission: config:export or config:import")
+    return templates.TemplateResponse(request, "config.html", _page_context(request, current))
+
+
+@router.get("/backups", response_class=HTMLResponse)
+def backups_page(
+    request: Request, current: CurrentUser | None = Depends(resolve_web_user)
+) -> Response:
+    redirect = _protected(current)
+    if redirect is not None:
+        return redirect
+    if current is None or "backup:read" not in current.permissions:
+        raise UnauthorizedError("Missing required permission: backup:read")
+    return templates.TemplateResponse(request, "backups.html", _page_context(request, current))
+
+
 def _gallery(request: Request, current: CurrentUser | None, title: str, kind: str) -> Response:
     redirect = _protected(current)
     if redirect is not None:

@@ -4,6 +4,14 @@ from app.models.api_token import ApiToken
 from app.models.app_setting import AppSetting
 from app.models.associations import group_roles, user_groups, user_roles
 from app.models.audit_event import AuditEvent
+from app.models.backup import (
+    BackupBlob,
+    BackupJob,
+    BackupRepository,
+    BackupRun,
+    BackupSnapshot,
+)
+from app.models.config_import import ConfigImportRun
 from app.models.file_change import FileChange
 from app.models.group import Group
 from app.models.media import (
@@ -46,6 +54,12 @@ __all__ = [
     "AppSetting",
     "AuditEvent",
     "AuthSession",
+    "BackupBlob",
+    "BackupJob",
+    "BackupRepository",
+    "BackupRun",
+    "BackupSnapshot",
+    "ConfigImportRun",
     "FileChange",
     "Group",
     "MediaAlbum",

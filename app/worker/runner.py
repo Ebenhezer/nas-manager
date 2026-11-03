@@ -17,7 +17,10 @@ under the same unprivileged account as the web application. Each tick it:
    checks, alert rule evaluation) on its own single-thread pool when due,
    and delivers queued alert notifications on another, so a slow SMTP
    server or ``smartctl`` never delays a tick, and
-8. occasionally prunes old run history, the media journal, orphaned
+8. runs backup, verify, prune and restore runs (Phase 11) one at a time
+   on their own single-thread pool, so a long backup never takes a sync
+   slot, and queues scheduled backups, and
+9. occasionally prunes old run history, the media journal, orphaned
    thumbnail cache files, old metric samples and resolved alerts.
 
 On SIGTERM/SIGINT it stops claiming, asks running jobs to stop after their
@@ -40,8 +43,9 @@ from app.core.config import Settings
 from app.core.secrets import CredentialCipher
 from app.db.base import utcnow_naive
 from app.db.session import Database
-from app.models import MediaLibrary, MediaTranscode, SyncRun
+from app.models import BackupRun, MediaLibrary, MediaTranscode, SyncRun
 from app.services import remote_sync
+from app.services.backup import jobs as backup_jobs
 from app.services.media import jobs as media_jobs
 from app.services.media import transcode
 from app.services.monitoring import alerts as monitor_alerts
@@ -73,6 +77,8 @@ class Worker:
         self.monitor_future: Future[None] | None = None
         self.notify_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="notify")
         self.notify_future: Future[None] | None = None
+        self.backup_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="backup")
+        self.backup_future: Future[None] | None = None
         # Monotonic deadlines; 0 means "due on the first tick".
         self._next_sample = 0.0
         self._next_check = 0.0
@@ -104,11 +110,15 @@ class Worker:
             self._media_tick(session, now)
             self._transcode_tick(session, now)
             self._monitor_tick(session, now)
+            self._backup_tick(session, now)
             if time.monotonic() - self._last_prune >= _PRUNE_INTERVAL_SECONDS:
                 self._last_prune = time.monotonic()
                 pruned = remote_sync.prune_runs(session, self.settings)
                 if pruned:
                     logger.info("pruned old sync runs", extra={"count": pruned})
+                backup_pruned = backup_jobs.prune_runs(session, self.settings)
+                if backup_pruned:
+                    logger.info("pruned old backup runs", extra={"count": backup_pruned})
                 media_pruned = media_jobs.prune(session, self.settings)
                 if any(media_pruned.values()):
                     logger.info("pruned media journal and cache", extra=media_pruned)
@@ -176,6 +186,35 @@ class Worker:
         notify_busy = self.notify_future is not None and not self.notify_future.done()
         if not notify_busy and monitor_notify.pending_count(session, now):
             self.notify_future = self.notify_pool.submit(self._notify)
+
+    def _backup_tick(self, session: Session, now: datetime) -> None:
+        lease = self.settings.backup_lease_seconds
+        backup_jobs.renew_leases(session, owner=self.owner, lease_seconds=lease)
+        reclaimed = backup_jobs.reclaim_expired(session, now)
+        if reclaimed:
+            logger.warning("failed backup runs with expired leases", extra={"count": reclaimed})
+        backup_jobs.enqueue_due_jobs(session, now)
+        busy = self.backup_future is not None and not self.backup_future.done()
+        if self.stop.is_set() or busy:
+            return
+        run = backup_jobs.claim_next(session, owner=self.owner, lease_seconds=lease)
+        if run is not None:
+            logger.info(
+                "backup run started",
+                extra={"run_id": run.id, "kind": run.kind, "repository_id": run.repository_id},
+            )
+            self.backup_future = self.backup_pool.submit(self._backup, run.id)
+
+    def _backup(self, run_id: int) -> None:
+        with self.db.session_factory() as session:
+            run = session.get(BackupRun, run_id)
+            if run is None:  # pragma: no cover - deleted between claim and start
+                return
+            backup_jobs.process_run(session, self.settings, run, cipher=self.cipher, stop=self.stop)
+            logger.info(
+                "backup run finished",
+                extra={"run_id": run.id, "kind": run.kind, "status": run.status},
+            )
 
     def _monitor(self, *, sample: bool, check: bool, smart: bool) -> None:
         """One monitor pass; each step is isolated so one failure never hides the rest."""
@@ -275,6 +314,8 @@ class Worker:
             self.monitor_future.result()
         if self.notify_future is not None:
             self.notify_future.result()
+        if self.backup_future is not None:
+            self.backup_future.result()
 
     def run_forever(self) -> None:
         logger.info("sync worker started", extra={"owner": self.owner})
@@ -290,4 +331,5 @@ class Worker:
         self.transcode_pool.shutdown(wait=True)
         self.monitor_pool.shutdown(wait=True)
         self.notify_pool.shutdown(wait=True)
+        self.backup_pool.shutdown(wait=True)
         logger.info("sync worker stopped")

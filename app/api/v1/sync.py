@@ -27,6 +27,8 @@ FEATURES = [
     "video_streaming",
     "monitoring",
     "alerting",
+    "backup",
+    "config_transfer",
 ]
 
 

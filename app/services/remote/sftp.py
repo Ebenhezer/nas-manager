@@ -251,6 +251,16 @@ class SftpProvider(RemoteProvider):
         except OSError as exc:
             raise RemoteError(f"Move failed: {exc}", details={"path": src}) from exc
 
+    def delete(self, path: str) -> None:
+        try:
+            self.sftp.remove(self._abs(path))
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            if getattr(exc, "errno", None) == errno.ENOENT:
+                return
+            raise RemoteError(f"Delete failed: {exc}", details={"path": path}) from exc
+
 
 def _mtime(value: int | float | None) -> datetime | None:
     return None if value is None else datetime.fromtimestamp(int(value), tz=UTC)

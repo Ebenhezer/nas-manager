@@ -108,6 +108,10 @@ class LocalDirProvider(RemoteProvider):
             raise RemoteError("Move destination exists")
         os.rename(self._p(src), self._p(dst))
 
+    def delete(self, path: str) -> None:
+        self.calls.append(("delete", path))
+        self._p(path).unlink(missing_ok=True)
+
 
 class BrokenProvider(LocalDirProvider):
     """Every upload fails (simulates a dead connection mid-run)."""
