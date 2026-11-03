@@ -2,15 +2,17 @@
 
 > **Interim, manual procedure.** Automated, versioned, verified backups and tested restore workflows are Phase 11 and do not exist yet.
 
-## What state exists in Phase 2
+## What state exists (Phases 1–6)
 
 | Path (systemd deployment) | Contents |
 |---------------------------|----------|
-| `/var/lib/nas-manager/nas.db` (+ `-wal`, `-shm`) | SQLite database: `app_settings`, users, groups, roles/permissions, sessions (token SHA-256 only), audit events |
+| `/var/lib/nas-manager/nas.db` (+ `-wal`, `-shm`) | SQLite database: `app_settings`, users, groups, roles/permissions, sessions (token SHA-256 only), audit events, public-upload records and quotas, API tokens (SHA-256 only), open resumable uploads (`upload_sessions`), the file change journal (`file_changes`) |
 | `/var/log/nas-manager/` | Rotated application logs |
 | `/etc/nas-manager/nas-manager.env` | Configuration (sensitive once production overrides are in place) |
 
 Sessions are stored in the database, so a restore also restores login state; the password hashes are Argon2id (safe to back up). To invalidate all sessions after a restore run `python -m app.cli bootstrap-admin --username <admin> --reset-password` or delete rows from `auth_sessions`.
+
+API tokens are restored too, including any revoked after the backup was taken. After restoring an older backup, review **API tokens** (`/tokens`) and revoke anything that should no longer work. Open resumable uploads in the backup refer to `.nas-resumable-<id>.part` staging files in the destination folders; if those files were not restored with the data, the uploads fail cleanly and clients start over. Restoring the database also rewinds the sync journal, so a client holding a newer cursor gets `reset: true` and re-lists.
 
 ## Manual backup
 

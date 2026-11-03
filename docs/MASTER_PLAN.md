@@ -1,7 +1,7 @@
 # NAS Manager — Master Plan
 
-> Status: Phases 1–5 are **done and verified** (see `docs/IMPLEMENTATION_PLAN.md`).
-> **Phase 6 (REST API, API tokens and mobile-client support) is next.** This file is the
+> Status: Phases 1–6 are **done and verified** (see `docs/IMPLEMENTATION_PLAN.md`).
+> **Phase 7 (Cloud and remote synchronization) is next.** This file is the
 > authoritative copy of the project contract below.
 
 ---
@@ -68,8 +68,8 @@ Build a modular web application using Python 3, FastAPI, HTML, CSS and JavaScrip
 - **Phase 3**: File manager and Samba integration. *(done)*
 - **Phase 4**: Public upload folder and quotas. *(done)*
 - **Phase 5**: Disk discovery, storage and RAID management. *(done)*
-- **Phase 6**: REST API, API tokens and mobile-client support. *(next)*
-- **Phase 7**: Cloud and remote synchronization.
+- **Phase 6**: REST API, API tokens and mobile-client support. *(done)*
+- **Phase 7**: Cloud and remote synchronization. *(next)*
 - **Phase 8**: Photo gallery and personal media libraries.
 - **Phase 9**: Video playback and streaming.
 - **Phase 10**: System monitoring and alerting.

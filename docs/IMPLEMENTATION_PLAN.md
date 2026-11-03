@@ -149,7 +149,7 @@ Delivered:
 
 - The public upload page (`/public/upload`) and the Uploads admin page were exercised via TestClient and curl only — no real browser run (drag-and-drop, progress bar styling, purge form).
 - The concurrency guarantee is enforced by the row-lock design and documented, but a true multi-process race was not hammered in CI; the single-writer SQLite path is covered by the transaction tests.
-- Anonymous quotas are keyed by client IP, which proxies/NAT can coalesce and botnets can fragment; API-token keying arrives with Phase 6.
+- Anonymous quotas are keyed by client IP, which proxies/NAT can coalesce and botnets can fragment; API-token clients are keyed `token:<id>` since Phase 6.
 
 ## Design decisions
 
@@ -238,12 +238,14 @@ Delivered:
 - **Client discovery and downloads**: public `GET /info` (API version, feature flags, limits); `GET /files/content` serves `Range` requests (206), verified by test.
 - **Web UI**: Profile has a "My API tokens" card (create with scope checkboxes and expiry, copy the one-time secret, revoke). There is an admin `/tokens` page with a permission-gated nav link. Both are CSP-compatible (DOM via `textContent`).
 - **Settings**: `NAS_API_TOKEN_*`, `NAS_RESUMABLE_*`, `NAS_SYNC_CHANGE_RETENTION_DAYS` (documented in both env templates).
+- **Postman collection** `docs/postman/nas-manager-phase6.postman_collection.json` for manual and runner testing of the whole flow.
+- **Fix (pre-existing, Phase 2):** the Profile change-password form's inputs had no `name` attributes, so `profile.js` submitted `"null"` for both passwords. Added the names and a regression test.
 
 ### Verification (executed in this workspace, Python 3.12.3, Ubuntu 24.04)
 
 | Check | Result |
 |-------|--------|
-| `pytest` | 342 passed (304 before Phase 6; +38 in `test_api_tokens.py`, `test_resumable_uploads.py`, `test_sync.py`, `test_public_uploads.py`, `test_dashboard.py`) |
+| `pytest` | 343 passed (304 before Phase 6; +39 in `test_api_tokens.py`, `test_resumable_uploads.py`, `test_sync.py`, `test_public_uploads.py`, `test_dashboard.py`) |
 | Coverage (`app/`) | 90 % overall; `sync` 100 %, `api_tokens` service 96 %, `resumable_uploads` 92 %, new routers 99–100 % |
 | `ruff check` / `ruff format --check` | clean (135 files) |
 | `mypy` (strict, `app` + `tests`) | no issues in 120 source files |
@@ -251,12 +253,15 @@ Delivered:
 | Live server smoke (`python -m app`, curl) | login → create token (201) → `/auth/me` via Bearer reports `auth_method: token` with the token's scopes → `/sync/cursor` `c0` → resumable upload of 21 bytes in two PATCH chunks (offset 10 after the first, `HEAD` agrees) → complete with SHA-256 (200) → `Range: bytes=6-14` → 206 with the expected bytes → `/sync/changes` lists the `created` entry, cursor `c1` → revoke (204) → the token returns 401 → `/info` public |
 | Tokens | raw value shown once / hash only stored; scope intersection and shrink-on-role-loss; scope escalation refused; expired/revoked/malformed → 401 without cookie fallback; throttle → 429 with only in-window failures audited; tokens cannot mint tokens, change the password or log out; admin oversight and operator read-only; password reset and deactivation revoke |
 | Resumable uploads | multi-chunk round-trip; resume after a lost acknowledgement; wrong offset → 409 with the current offset; disconnect keeps received bytes; chunk/total limits roll back; checksum mismatch discards; jail/traversal/unknown root rejected; a name that appears while the upload is open → 409 with bytes kept; owner-only (404); `files:write` required; open-upload cap; expiry sweep; token-keyed public quota with authoritative check at completion (413, no leftovers); drop-folder cleanup spares staging files; concurrent request → 409 |
+| Postman collection (`docs/postman/`) | all 23 requests replayed against a fresh server with a stdlib Python runner mirroring the collection's checks: all passed, twice in a row |
+| Startup and logs | fresh data directory → `/health` `ok` at revision `0006`; after the full collection run the application log has no ERROR/CRITICAL entries or tracebacks (only the expected `NAS_SESSION_COOKIE_SECURE is false` warning for plain-HTTP local runs) |
 | Sync | every mutation kind journaled in order; pagination; reset for future/pruned/never-synced cursors; malformed cursor 400; unknown root 404; `files:read` required |
 
 ### Not verified
 
 - The new UI (Profile → My API tokens, the `/tokens` admin page) was checked through TestClient only, for page rendering and the absence of inline code. It was not used in a real browser, and the JavaScript was not syntax-checked because no Node runtime is available in this workspace.
 - No real mobile client was exercised. The protocol was driven through TestClient and curl.
+- The Postman collection's own JavaScript test scripts were not run inside Postman or Newman (no Node runtime); its requests were replayed with an equivalent Python runner.
 - The resumable-upload lock and the bearer-failure throttle were exercised in a single process only.
 - PostgreSQL still not exercised.
 
