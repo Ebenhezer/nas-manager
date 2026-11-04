@@ -101,11 +101,11 @@ The running application cannot replace its own database, so a system restore is 
 
    ```bash
    sudo systemctl stop nas-manager-worker nas-manager
-   sudo -u nas-manager /opt/nas-manager/.venv/bin/python -m app.cli restore-system --run <run id> --yes
+   sudo /opt/nas-manager/deploy/nas-manager-cli restore-system --run <run id> --yes
    sudo systemctl start nas-manager nas-manager-worker
    ```
 
-   The command re-checks every staged file's checksum, renames the current `nas.db` (and `-wal`/`-shm`) and, if different, `credentials.key` to `*.before-restore-<timestamp>` (never deleted), installs the staged copies (database `0640`, key `0600`), applies migrations (an older backup is upgraded) and records `backup.system_restored` in the restored audit log. Without `--yes` it only explains what it would do.
+   `deploy/nas-manager-cli` (Phase 14) runs the CLI as the service account with the units' environment, so it acts on `/var/lib/nas-manager`. The command re-checks every staged file's checksum, renames the current `nas.db` (and `-wal`/`-shm`) and, if different, `credentials.key` to `*.before-restore-<timestamp>` (never deleted), installs the staged copies (database `0640`, key `0600`), applies migrations (an older backup is upgraded) and records `backup.system_restored` in the restored audit log. Without `--yes` it only explains what it would do.
 
 3. **Samba.** `smb.conf` is staged next to the database but not written to `/etc`. The restored database contains the share definitions: open **Samba** and apply the configuration to regenerate the managed section. Compare with the staged `smb.conf` if you had unmanaged settings.
 
@@ -118,8 +118,8 @@ What a database restore rewinds (all as before Phase 11): sessions and API token
 3. List the snapshots and restore the system state into an empty folder:
 
    ```bash
-   sudo -u nas-manager /opt/nas-manager/.venv/bin/python -m app.cli backup-recover --repo-dir /mnt/backup-usb/nas
-   sudo -u nas-manager /opt/nas-manager/.venv/bin/python -m app.cli backup-recover --repo-dir /mnt/backup-usb/nas \
+   sudo /opt/nas-manager/deploy/nas-manager-cli backup-recover --repo-dir /mnt/backup-usb/nas
+   sudo /opt/nas-manager/deploy/nas-manager-cli backup-recover --repo-dir /mnt/backup-usb/nas \
        --snapshot <system snapshot id> --target /var/lib/nas-manager/recovered
    ```
 

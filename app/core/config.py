@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -33,6 +34,19 @@ class Settings(BaseSettings):
 
     host: str = "127.0.0.1"
     port: int = Field(default=8080, ge=1, le=65535)
+
+    # ------------------------------------------------------------------
+    # Reverse proxy and transport (Phase 14). NAS_FORWARDED_ALLOW_IPS lists
+    # the proxy addresses whose X-Forwarded-For/-Proto headers are trusted
+    # (uvicorn's forwarded_allow_ips; "*" trusts everyone, never do that on
+    # a reachable port). NAS_TRUSTED_HOSTS is a comma-separated list of
+    # accepted Host header values ("*.example.org" allowed); empty disables
+    # the check. NAS_HSTS_MAX_AGE_SECONDS > 0 sends Strict-Transport-Security
+    # on HTTPS responses.
+    # ------------------------------------------------------------------
+    forwarded_allow_ips: str = "127.0.0.1"
+    trusted_hosts: str = ""
+    hsts_max_age_seconds: int = Field(default=0, ge=0, le=2 * 365 * 86400)
 
     data_dir: Path = Path("data")
     log_dir: Path | None = None
@@ -149,6 +163,10 @@ class Settings(BaseSettings):
     public_upload_enabled: bool = True
     public_upload_max_file_bytes: int = Field(default=_GIB, ge=1024)
     public_upload_default_quota_bytes: int = Field(default=_GIB, ge=1)
+    # Request rate limit per uploader on POST /public/uploads (Phase 14):
+    # checked before the body is read, in-process sliding window. 0 disables.
+    public_upload_rate_max_requests: int = Field(default=30, ge=0, le=100_000)
+    public_upload_rate_window_seconds: int = Field(default=300, ge=10, le=86400)
 
     # ------------------------------------------------------------------
     # API tokens and mobile clients (Phase 6). Tokens are personal,
@@ -343,6 +361,15 @@ class Settings(BaseSettings):
             raise ValueError("NAS_PUBLIC_BASE_URL must be an http(s) URL without query/fragment")
         return value
 
+    @field_validator("forwarded_allow_ips", "trusted_hosts")
+    @classmethod
+    def _host_lists(cls, value: str) -> str:
+        items = [part.strip() for part in value.split(",") if part.strip()]
+        for item in items:
+            if not re.fullmatch(r"[A-Za-z0-9*.:/\[\]_-]{1,253}", item):
+                raise ValueError(f"invalid host or address: {item!r}")
+        return ",".join(dict.fromkeys(items))
+
     @field_validator("monitor_services")
     @classmethod
     def _monitor_services(cls, value: str) -> str:
@@ -450,6 +477,10 @@ class Settings(BaseSettings):
         return frozenset(uids)
 
     @property
+    def trusted_host_list(self) -> list[str]:
+        return [host for host in self.trusted_hosts.split(",") if host]
+
+    @property
     def monitor_service_list(self) -> list[str]:
         return [unit for unit in self.monitor_services.split(",") if unit]
 
@@ -474,6 +505,18 @@ class Settings(BaseSettings):
         if not self.backup_local_roots:
             (self.data_dir / "backups").mkdir(parents=True, exist_ok=True, mode=0o750)
         self.resolved_backup_staging_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+
+def tighten_umask() -> int:
+    """Never create group-writable or world-accessible files (Phase 14).
+
+    The systemd units already set ``UMask=0027``; this keeps the database,
+    logs and caches private when a process is started some other way. A
+    stricter umask is kept as it is. Returns the umask now in effect.
+    """
+    current = os.umask(0o077)
+    os.umask(current | 0o027)
+    return current | 0o027
 
 
 @lru_cache

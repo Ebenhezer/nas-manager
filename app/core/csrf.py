@@ -32,7 +32,9 @@ from app.models import AuthSession
 from app.services.auth_service import token_digest
 
 UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
-_FORM_CONTENT_TYPES = ("application/x-www-form-urlencoded", "multipart/form-data")
+_URLENCODED = "application/x-www-form-urlencoded"
+# The web forms that carry ``_csrf`` (login, logout) are tiny.
+_MAX_FORM_BYTES = 64 * 1024
 
 
 class CSRFProtectMiddleware(BaseHTTPMiddleware):
@@ -121,19 +123,31 @@ class CSRFProtectMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     async def _read_form_token(request: Request) -> str | None:
-        """Extract ``_csrf`` from a form body and re-inject the buffered body
-        so the route can parse the form afterwards."""
-        content_type = request.headers.get("content-type", "")
-        if not any(content_type.lower().startswith(t) for t in _FORM_CONTENT_TYPES):
+        """Extract ``_csrf`` from a urlencoded form body and re-inject the
+        buffered body so the route can parse the form afterwards.
+
+        Only small urlencoded bodies are buffered. Multipart requests (file
+        uploads) must send ``X-CSRF-Token``: reading them here would hold the
+        whole upload in memory before the check could fail anyway.
+        """
+        content_type = request.headers.get("content-type", "").lower()
+        if not content_type.startswith(_URLENCODED):
             return None
-        body_bytes = await request.body()
-        if body_bytes:
-            # Re-inject so FastAPI's form parser still sees the body.
-            request._body = body_bytes
-            if content_type.lower().startswith("application/x-www-form-urlencoded"):
-                values = parse_qs(body_bytes.decode("utf-8", errors="replace")).get("_csrf")
-                return values[-1] if values else None
-        return None
+        declared = request.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > _MAX_FORM_BYTES:
+            return None
+        chunks: list[bytes] = []
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > _MAX_FORM_BYTES:
+                return None
+            chunks.append(chunk)
+        body_bytes = b"".join(chunks)
+        # Re-inject so FastAPI's form parser still sees the body.
+        request._body = body_bytes
+        values = parse_qs(body_bytes.decode("utf-8", errors="replace")).get("_csrf")
+        return values[-1] if values else None
 
     def _maybe_set_cookie(self, request: Request, response: Response) -> None:
         if request.method != "GET":

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Hashable
 from dataclasses import dataclass, field
 
 from fastapi import Depends, Request
@@ -57,10 +57,10 @@ class DenialThrottle:
 
     window_seconds: float = 60.0
     max_entries: int = 10_000
-    _seen: dict[tuple[int, str, str], float] = field(default_factory=dict)
+    _seen: dict[Hashable, float] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
-    def should_record(self, key: tuple[int, str, str]) -> bool:
+    def should_record(self, key: Hashable) -> bool:
         now = time.monotonic()
         with self._lock:
             last = self._seen.get(key)

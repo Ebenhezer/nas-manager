@@ -28,10 +28,10 @@ from app.services.users_service import change_password
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-def _set_auth_cookies(
-    response: Response, request: Request, raw_token: str, csrf_token: str
+def set_auth_cookies(
+    response: Response, settings: Settings, raw_token: str, csrf_token: str
 ) -> None:
-    settings: Settings = request.app.state.settings
+    """Set the session and CSRF cookies (API and web form logins)."""
     response.set_cookie(
         settings.session_cookie_name,
         raw_token,
@@ -52,10 +52,20 @@ def _set_auth_cookies(
     )
 
 
-def _clear_auth_cookies(response: Response, request: Request) -> None:
-    settings: Settings = request.app.state.settings
-    response.delete_cookie(settings.session_cookie_name, path="/")
-    response.delete_cookie(settings.csrf_cookie_name, path="/")
+def clear_auth_cookies(response: Response, settings: Settings) -> None:
+    """Expire both cookies with the attributes they were set with, so the
+    browser matches and replaces them."""
+    for name, httponly in (
+        (settings.session_cookie_name, True),
+        (settings.csrf_cookie_name, False),
+    ):
+        response.delete_cookie(
+            name,
+            path="/",
+            secure=settings.session_cookie_secure,
+            httponly=httponly,
+            samesite=settings.session_cookie_samesite,
+        )
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -79,7 +89,12 @@ def login(
     if not result.ok or result.user is None or result.raw_session_token is None:
         raise UnauthorizedError(result.error_message or "Invalid username or password")
     user = result.user
-    _set_auth_cookies(response, request, result.raw_session_token, result.csrf_token or "")
+    set_auth_cookies(
+        response,
+        request.app.state.settings,
+        result.raw_session_token,
+        result.csrf_token or "",
+    )
     permissions = effective_permissions_for_user(db, user)
     roles = sorted(role.name for role in user.roles)
     return LoginResponse(
@@ -99,7 +114,7 @@ def logout(
 ) -> None:
     if current.session is not None:  # always true behind require_session_auth
         auth_service.logout(db, current.session, actor=current.user)
-    _clear_auth_cookies(response, request)
+    clear_auth_cookies(response, request.app.state.settings)
     response.status_code = 204
 
 

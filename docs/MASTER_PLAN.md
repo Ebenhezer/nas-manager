@@ -1,8 +1,7 @@
 # NAS Manager — Master Plan
 
-> Status: Phases 1–13 are **done and verified** (see `docs/IMPLEMENTATION_PLAN.md`).
-> **Phase 14 (Security hardening, deployment testing and documentation) is next.** This file is the
-> authoritative copy of the project contract below.
+> Status: Phases 1–14 are **done and verified** (see `docs/IMPLEMENTATION_PLAN.md`), including a
+> live systemd deployment in Phase 14. This file is the authoritative copy of the project contract below.
 
 ---
 
@@ -76,7 +75,7 @@ Build a modular web application using Python 3, FastAPI, HTML, CSS and JavaScrip
 - **Phase 11**: Backup and restore. *(done)*
 - **Phase 12**: Configuration export and import. *(done)*
 - **Phase 13**: Syslog and comprehensive auditing. *(done)*
-- **Phase 14**: Security hardening, deployment testing and documentation. *(next)*
+- **Phase 14**: Security hardening, deployment testing and documentation. *(done)*
 
 ## Acceptance requirements
 

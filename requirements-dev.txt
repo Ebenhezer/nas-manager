@@ -4,6 +4,8 @@ pytest==9.1.1
 pytest-cov==7.1.0
 ruff==0.17.1
 mypy==2.4.0
+# Dependency vulnerability scanning (Phase 14): pip-audit -r requirements.txt
+pip-audit==2.10.1
 types-psutil==7.2.2.20260906
 # Type stubs for the Phase 7 remote-sync providers
 boto3-stubs[s3]==1.43.123

@@ -173,7 +173,10 @@ def _findmnt_targets(source: str) -> list[str]:
 
 
 def _path_is_mountpoint(path: str) -> bool:
-    result = _run(["findmnt", "-n", "--target", path])
+    """True only when ``path`` itself is a mount point. (``--target`` would
+    match the file system *containing* any existing path, refusing every
+    pre-existing mount directory.)"""
+    result = _run(["findmnt", "-n", "--mountpoint", path])
     return result.returncode == 0
 
 

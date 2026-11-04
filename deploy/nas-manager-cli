@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Run `python -m app.cli` as the service account with the same environment as
+# the systemd units (Phase 14), so bootstrap-admin, restore-system and
+# backup-recover act on /var/lib/nas-manager rather than on a database next
+# to the caller's working directory:
+#
+#   sudo /opt/nas-manager/deploy/nas-manager-cli bootstrap-admin
+#   printf '%s\n' "$PASSWORD" | sudo /opt/nas-manager/deploy/nas-manager-cli \
+#       bootstrap-admin --username admin --password-stdin
+#
+# Interactive use gets a pseudo-terminal (password prompts); piped input is
+# passed through unchanged. Log lines go to the journal as nas-manager-cli.
+set -euo pipefail
+
+readonly PREFIX=/opt/nas-manager
+readonly ENV_FILE=/etc/nas-manager/nas-manager.env
+
+[[ $EUID -eq 0 ]] || { echo "run as root (sudo)" >&2; exit 1; }
+[[ -x $PREFIX/.venv/bin/python ]] || { echo "NAS Manager is not installed in $PREFIX" >&2; exit 1; }
+
+if [[ -t 0 ]]; then
+    IO=--pty
+else
+    IO=--pipe
+fi
+
+exec systemd-run --quiet --wait --collect "$IO" \
+    --uid=nas-manager --gid=nas-manager \
+    --working-directory="$PREFIX" \
+    -p EnvironmentFile="$ENV_FILE" \
+    -p UMask=0027 \
+    -E NAS_DATA_DIR=/var/lib/nas-manager \
+    -E NAS_LOG_DIR=/var/log/nas-manager \
+    -E NAS_ENVIRONMENT=production \
+    -E NAS_LOG_TO_FILE=false \
+    -E NAS_SYSLOG_IDENTIFIER=nas-manager-cli \
+    "$PREFIX/.venv/bin/python" -m app.cli "$@"

@@ -201,6 +201,17 @@ def _fake_device(monkeypatch: pytest.MonkeyPatch, name: str = "sdb1") -> str:
     return f"/dev/{name}"
 
 
+def test_mountpoint_check_matches_only_exact_mount_points(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeRun()
+    monkeypatch.setattr(subprocess, "run", fake)
+    assert operations._path_is_mountpoint("/mnt/data") is False  # findmnt exits 1
+    fake.results["findmnt"] = ok()
+    assert operations._path_is_mountpoint("/mnt/data") is True
+    assert fake.calls == [["findmnt", "-n", "--mountpoint", "/mnt/data"]] * 2
+
+
 def test_mount_requires_block_device(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
     def no_device(_name: str) -> str:
         raise ValidationError("no such device")

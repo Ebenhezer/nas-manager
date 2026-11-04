@@ -58,7 +58,7 @@ class ForbiddenError(AppError):
 
 
 class TooManyRequestsError(AppError):
-    """Login throttling (429)."""
+    """Rate limiting: logins, bearer failures, the public drop folder (429)."""
 
     status_code = 429
     code = "too_many_requests"
@@ -69,6 +69,13 @@ class QuotaExceededError(AppError):
 
     status_code = 413
     code = "quota_exceeded"
+
+
+class PayloadTooLargeError(AppError):
+    """A request body is larger than the endpoint accepts (413)."""
+
+    status_code = 413
+    code = "payload_too_large"
 
 
 class ConfigurationError(AppError):

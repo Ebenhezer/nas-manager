@@ -54,6 +54,20 @@ def _set_socket_access(socket_path: Path, settings: Settings) -> None:
     os.chmod(socket_path, 0o660)
 
 
+def prepare_socket_dir(directory: Path) -> None:
+    """Create the socket's directory when it is missing, traverse-only (0711).
+
+    An existing directory is never re-moded: under systemd it is the unit's
+    ``RuntimeDirectory=`` (``RuntimeDirectoryMode=0711``), and a configured
+    socket path may live in a shared directory such as ``/run``. The socket's
+    own ``0660 root:<group>`` mode and the ``SO_PEERCRED`` check gate access.
+    """
+    if directory.exists():
+        return
+    directory.mkdir(parents=True, mode=0o711)
+    os.chmod(directory, 0o711)  # noqa: S103 - traverse-only; mkdir applies the umask
+
+
 def _handle_connection(conn: socket.socket, settings: Settings) -> None:
     op = "?"
     request_id: str | None = None
@@ -109,10 +123,7 @@ def serve(settings: Settings) -> None:
     signal.signal(signal.SIGTERM, _shutdown)
 
     socket_path = settings.resolved_helper_socket
-    socket_path.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
-    with suppress(OSError):
-        # Group traversal: the unprivileged service user must reach the socket.
-        os.chmod(socket_path.parent, 0o750)  # noqa: S103 - deliberate shared-directory access
+    prepare_socket_dir(socket_path.parent)
     if socket_path.exists():
         socket_path.unlink()
 

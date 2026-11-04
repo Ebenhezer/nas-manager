@@ -24,38 +24,83 @@ Checks:
 
 ## Production (systemd)
 
-Authentication is available since Phase 2; the default `NAS_HOST=127.0.0.1` still fits an SSH-tunnel workflow: `ssh -L 8080:127.0.0.1:8080 nas-host`. To expose the service, put a TLS-terminating reverse proxy in front and set `NAS_SESSION_COOKIE_SECURE=true` (the deploy template enables it).
+Exercised end to end in Phase 14 with systemd 255 in an Ubuntu 24.04 container (see `IMPLEMENTATION_PLAN.md` for what that did not cover). The application listens on `127.0.0.1:8080` behind a TLS-terminating reverse proxy; an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 nas-host`) works too.
 
 ```bash
-# 1. Service account (no login shell, no home directory)
-sudo useradd --system --user-group --no-create-home --shell /usr/sbin/nologin nas-manager
+# 1. Prerequisites (Python 3.12+, venv; helper tools; reverse proxy)
+sudo apt install python3-venv smartmontools mdadm util-linux nginx
 
-# 2. Application files
-sudo apt install python3-venv
-sudo mkdir -p /opt/nas-manager
-sudo cp -r app migrations deploy docs alembic.ini requirements.txt /opt/nas-manager/
-sudo python3 -m venv /opt/nas-manager/.venv
-sudo /opt/nas-manager/.venv/bin/pip install -r /opt/nas-manager/requirements.txt
+# 2. Install from the source tree (idempotent; also the upgrade command).
+#    --with-helper installs the root helper for disks, RAID and Samba reloads.
+sudo deploy/install.sh --with-helper
 
-# 3. Configuration (root-owned, readable by the service group)
-sudo install -d -m 0750 -o root -g nas-manager /etc/nas-manager
-sudo install -m 0640 -o root -g nas-manager deploy/nas-manager.env.example /etc/nas-manager/nas-manager.env
-#    Review /etc/nas-manager/nas-manager.env; it ships NAS_SESSION_COOKIE_SECURE=true.
+# 3. Review the configuration it created (only created when missing):
+#    NAS_TRUSTED_HOSTS, NAS_FILE_ROOTS, NAS_MEDIA_DIR, ...
+sudoedit /etc/nas-manager/nas-manager.env
 
-# 4. Unit
-sudo cp deploy/systemd/nas-manager.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now nas-manager
+# 4. Start helper, web (applies migrations in ExecStartPre) and worker.
+sudo systemctl start nas-manager-helper nas-manager nas-manager-worker
 
-# 5. First administrator (migrations run in ExecStartPre, then bootstrap)
-#    The password is read interactively (or from stdin with --password-stdin);
-#    it is never taken from argv, an environment variable or a log file.
-sudo -u nas-manager /opt/nas-manager/.venv/bin/python -m app.cli bootstrap-admin --username admin
+# 5. First administrator. The password is read interactively (or from stdin
+#    with --password-stdin); never from argv, the environment or a log.
+sudo /opt/nas-manager/deploy/nas-manager-cli bootstrap-admin --username admin
+
+# 6. Verify (add --no-helper without the helper; --login reads the password from stdin).
+sudo python3 /opt/nas-manager/deploy/smoke_test.py
+printf '%s\n' "$ADMIN_PASSWORD" | sudo python3 /opt/nas-manager/deploy/smoke_test.py --login admin
 ```
 
-The unit sets `NAS_DATA_DIR=/var/lib/nas-manager` and `NAS_LOG_DIR=/var/log/nas-manager`; systemd creates both with the service user as owner. Migrations run in `ExecStartPre`.
+What `install.sh` does: creates the `nas-manager` system user (no shell, no home), stops running units, copies the code to `/opt/nas-manager` (root-owned, read-only for the service), builds the virtual environment from the pinned `requirements.txt`, creates `/etc/nas-manager` (`0750 root:nas-manager`) and installs `nas-manager.env` (`0640`) **only when it does not exist** (with the helper, it appends `NAS_HELPER_ALLOWED_UIDS=<uid>`; without, it sets `NAS_HELPER_ENABLED=false`), installs and enables the units and starts what was running before (`--start` starts everything). It never creates accounts in the application, formats, mounts or deletes data.
 
-Use `deploy/nas-manager.env.example` (not the development `.env.example`) for the service: systemd lets `EnvironmentFile=` override `Environment=`, so a `NAS_DATA_DIR` in the env file would override the unit's value.
+The units set `NAS_DATA_DIR=/var/lib/nas-manager` and `NAS_LOG_DIR=/var/log/nas-manager`; systemd creates both with the service user as owner. Use `deploy/nas-manager.env.example` (not the development `.env.example`) for the service: systemd lets `EnvironmentFile=` override `Environment=`, so the per-unit settings (`NAS_DATA_DIR`, `NAS_LOG_DIR`, `NAS_ENVIRONMENT`, `NAS_LOG_FILE_NAME`, `NAS_LOG_TO_FILE`, `NAS_SYSLOG_IDENTIFIER`) must stay out of the env file (a test enforces this).
+
+Always run CLI commands (`bootstrap-admin`, `restore-system`, `backup-recover`) through `deploy/nas-manager-cli`: it runs `python -m app.cli` as the service account with the units' environment through `systemd-run`. A plain `sudo -u nas-manager … python -m app.cli` (the instruction before Phase 14) does not load the env file or the unit's `NAS_DATA_DIR` and acts on a `data/` directory relative to the current directory.
+
+### Reverse proxy and TLS
+
+`deploy/nginx/nas-manager.conf` is a complete nginx site (tested with nginx 1.24 in Phase 14): HTTP → HTTPS redirect, TLS 1.2/1.3, HTTP/2, `X-Forwarded-For $remote_addr` (**overwritten**, never appended, so clients cannot choose their address), `X-Forwarded-Proto`, a 2100 MiB body limit, unbuffered upload and media locations and `limit_req` on the drop endpoint and the login routes.
+
+```bash
+sudo install -d -m 0750 /etc/ssl/nas-manager      # fullchain.pem + privkey.pem (e.g. from certbot)
+sudo cp /opt/nas-manager/deploy/nginx/nas-manager.conf /etc/nginx/sites-available/
+sudo sed -i 's/nas.example.org/nas.your-domain/' /etc/nginx/sites-available/nas-manager.conf
+sudo ln -s ../sites-available/nas-manager.conf /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Then, in `/etc/nas-manager/nas-manager.env`:
+
+| Setting | Value | Why |
+|---------|-------|-----|
+| `NAS_SESSION_COOKIE_SECURE` | `true` (template default) | cookies only over TLS |
+| `NAS_TRUSTED_HOSTS` | `nas.your-domain,localhost,127.0.0.1` | refuse other `Host` headers (400); keep the loopback names for the smoke test |
+| `NAS_FORWARDED_ALLOW_IPS` | `127.0.0.1` (template default) | only the local proxy may set the client address and scheme |
+| `NAS_HSTS_MAX_AGE_SECONDS` | `31536000` (template default) | browsers stay on HTTPS; set `0` if the name is ever served over plain HTTP |
+
+On nginx 1.25.1 or newer, replace `listen 443 ssl http2;` with `listen 443 ssl;` plus `http2 on;`.
+
+### Firewall
+
+Only the proxy should be reachable. With ufw:
+
+```bash
+sudo ufw default deny incoming
+sudo ufw allow OpenSSH
+sudo ufw allow 'Nginx Full'            # 80 + 443
+sudo ufw allow from 192.168.1.0/24 to any app Samba   # LAN only, if Samba is used
+sudo ufw enable
+```
+
+Port 8080 is bound to loopback and needs no rule. Do not bind `NAS_HOST` to `0.0.0.0` without a firewall rule restricting it.
+
+### Uninstalling
+
+```bash
+sudo /opt/nas-manager/deploy/uninstall.sh                 # removes units and /opt/nas-manager, keeps data
+sudo /src/nas-manager/deploy/uninstall.sh --purge --yes   # also /var/lib, /var/log, /etc/nas-manager and the user
+```
+
+`--purge` without `--yes` refuses. Managed file roots, media folders and backup roots outside `/var/lib/nas-manager`, `smb.conf` and mounted disks are never touched. A later `install.sh` picks up kept data again (verified in Phase 14).
 
 ### File manager and Samba (Phase 3)
 
@@ -63,37 +108,31 @@ Use `deploy/nas-manager.env.example` (not the development `.env.example`) for th
 - **Samba.** The app manages shares in its database and renders them into `smb.conf`. The web process runs unprivileged and **cannot write `/etc/samba/smb.conf`** by itself. Deploy the Phase 5 helper (`nas-manager-helper.service`, below) and set `NAS_HELPER_ENABLED=true`: **Apply** then writes the validated config through the helper (re-validating with `testparm -s`, backing up, atomic write) and reloads `smbd`, and the Samba page shows `reload_required: false`.
   - For a dev/test setup without the helper, point `NAS_SAMBA_CONFIG_PATH` at a writable file and `NAS_SAMBA_BACKUP_DIR` at a writable backup directory (default `<DATA_DIR>/samba-backups`); Apply then writes the config and reports `reload_required: true`. Samba must be installed on the host for validation (`testparm`; `apt install samba`).
 - **Operators and Files/Samba.** By default only admin (or custom roles with `files:*`/`samba:*`) can open the Files and Samba pages. To let operators *view* them read-only, enable the **Settings → "Allow operators to view the Files and Samba pages"** toggle (stored per-installation; writes are never granted by it).
-- **Public upload folder (Phase 4).** The drop folder lives at `NAS_PUBLIC_UPLOAD_DIR` (default `<DATA_DIR>/uploads`, auto-created and owned by the service user; chown it there if you set a custom path). `NAS_PUBLIC_UPLOAD_MAX_FILE_BYTES` caps each file (default 1 GiB) and `NAS_PUBLIC_UPLOAD_DEFAULT_QUOTA_BYTES` sets the per-uploader quota (default 1 GiB). Public uploads are on by default; the **Settings → "Accept public uploads"** toggle and `NAS_PUBLIC_UPLOAD_ENABLED` both disable them (403). Administer quotas and cleanup on the **Uploads** page (needs `uploads:read`/`uploads:write`; the built-in operator role gets read-only). If the folder is exposed publicly, terminate TLS in front and consider rate-limiting `/public/upload` at your reverse proxy.
+- **Public upload folder (Phase 4).** The drop folder lives at `NAS_PUBLIC_UPLOAD_DIR` (default `<DATA_DIR>/uploads`, auto-created and owned by the service user; chown it there if you set a custom path). `NAS_PUBLIC_UPLOAD_MAX_FILE_BYTES` caps each file (default 1 GiB) and `NAS_PUBLIC_UPLOAD_DEFAULT_QUOTA_BYTES` sets the per-uploader quota (default 1 GiB). Public uploads are on by default; the **Settings → "Accept public uploads"** toggle and `NAS_PUBLIC_UPLOAD_ENABLED` both disable them (403). Administer quotas and cleanup on the **Uploads** page (needs `uploads:read`/`uploads:write`; the built-in operator role gets read-only). Uploads are rate limited per uploader before the body is read (`NAS_PUBLIC_UPLOAD_RATE_MAX_REQUESTS` per `NAS_PUBLIC_UPLOAD_RATE_WINDOW_SECONDS`, default 30 per 5 minutes; 429 with `Retry-After`), and the nginx example adds a per-address `limit_req` in front.
 
 ### Disks, storage and RAID (Phase 5, privileged helper)
 
 The web process stays unprivileged. A second root service performs discovery and the privileged actions:
 
+`install.sh --with-helper` installs and enables `nas-manager-helper.service` and authorises the service account (`NAS_HELPER_ALLOWED_UIDS`). To add the helper to an existing installation, re-run the installer with `--with-helper` and set in `/etc/nas-manager/nas-manager.env`:
+
 ```bash
-# 1. Install the helper's requirements (same venv as the app).
-sudo apt install smartmontools mdadm mount util-linux
-
-# 2. Helper unit (runs `python -m app.helper` as root)
-sudo cp deploy/systemd/nas-manager-helper.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now nas-manager-helper
-
-# 3. Enable the web process to use it and authorise the service account.
-#    In /etc/nas-manager/nas-manager.env (web + helper share the file):
-#      NAS_HELPER_ENABLED=true
-#      NAS_HELPER_SOCKET=/run/nas-manager/helper.sock
-#      NAS_HELPER_ALLOWED_UIDS=<numeric uid of the nas-manager user>
-#      NAS_HELPER_SOCKET_GROUP=nas-manager
-sudo systemctl restart nas-manager nas-manager-helper
+NAS_HELPER_ENABLED=true
+NAS_HELPER_ALLOWED_UIDS=<output of: id -u nas-manager>
+# NAS_HELPER_SOCKET=/run/nas-manager/helper.sock   (default)
+# NAS_HELPER_SOCKET_GROUP=nas-manager              (default)
+sudo systemctl restart nas-manager-helper nas-manager nas-manager-worker
 journalctl -u nas-manager-helper -n 50 --no-pager
 ```
 
+The helper runs in the host's mount namespace on purpose (no `PrivateTmp`/`ProtectHome`/`ProtectSystem`), so a disk it mounts is visible to Samba, the web unit and the shell. Its run directory `/run/nas-manager` is `0711` (traverse only) and the socket `0660 root:nas-manager`.
+
 Then open **Disks** in the UI: physical disks, mounted volumes and RAID arrays render from the helper; the badge in the header shows `helper online`. Mount/unmount/scrub flows always show a **preview first** (the exact action, warnings and data-loss notes) and require an explicit confirmation — nothing is ever mounted, unmounted or scrubbed automatically.
 
-- The helper binds `/run/nas-manager/helper.sock` (`0660 root:<group>`) and accepts connections only from root or the UIDs in `NAS_HELPER_ALLOWED_UIDS` (the service user's UID; `SO_PEERCRED`-enforced) — no password/secret is shared over the wire.
+- The helper binds `/run/nas-manager/helper.sock` (`0660 root:<group>`, in a `0711` directory) and accepts connections only from root or the UIDs in `NAS_HELPER_ALLOWED_UIDS` (the service user's UID; `SO_PEERCRED`-enforced) — no password/secret is shared over the wire.
 - Discovery (`lsblk`, `findmnt`, `/proc/mdstat`, `smartctl`) and actions (`mount`, `umount`, md `check` scrub, `smbcontrol all reload-config`) run in the helper with a fixed allowlist; the web process sends only validated parameter objects, never command lines.
 - With `NAS_HELPER_ENABLED=true`, **Samba Apply** now also writes `/etc/samba/smb.conf` (via the helper) and reloads `smbd`; the Samba page shows the helper state and `reload_required: false`.
-- **Test on a scratch disk only** (USB stick or a spare drive): format a test filesystem (`sudo mkfs.ext4 /dev/sdX`), then use the Disks page to mount it under `/mnt` and unmount it again. Never point the page at a disk holding data.
+- **Test on a scratch disk only** (USB stick, a spare drive or a loop device: `truncate -s 64M /root/scratch.img && mkfs.ext4 /root/scratch.img && sudo losetup -f --show /root/scratch.img`), then use the Disks page to mount it under `/mnt` and unmount it again (`losetup -d /dev/loopN` afterwards). Never point the page at a disk holding data.
 
 ### Remote and cloud sync (Phase 7, sync worker)
 
@@ -213,16 +252,21 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/login   # 200
 
 ### Troubleshooting
 
-The unit applies strict sandboxing (`SystemCallFilter`, `MemoryDenyWriteExecute`, `ProtectSystem=strict`) that was validated with `systemd-analyze` but **not run under a live systemd**. ffmpeg/ffprobe under these sandboxes (web and worker units) is likewise unverified on a real host: if probing or transcoding fails only under systemd, check `journalctl` for `SIGSYS`/`mprotect` errors and the media status card's last transcode error. If the service exits with `SIGSYS`, an `mprotect`/`mmap` error or a "read-only file system" error in `journalctl -u nas-manager`, relax the corresponding directive with a drop-in (`systemctl edit nas-manager`) and report which one was needed.
+- `journalctl -u nas-manager -u nas-manager-worker -u nas-manager-helper -p warning` shows every warning, including the production configuration warnings logged at startup (cookie not Secure, debug on, no trusted hosts, `NAS_FORWARDED_ALLOW_IPS=*`, drop folder without a rate limit).
+- `helper probe failed` / Disks page "helper offline": the helper is not running, `NAS_HELPER_ALLOWED_UIDS` lacks the service account's UID, or `/run/nas-manager` is not traversable (it must be `0711`; the helper never re-modes an existing directory).
+- `400 Invalid host header`: add the name to `NAS_TRUSTED_HOSTS`.
+- The sandbox ran under systemd 255 in Phase 14 (web, worker, helper; a real mount/unmount through the helper). ffmpeg under the worker sandbox was not exercised there. If a unit exits with `SIGSYS`, an `mprotect`/`mmap` error or "read-only file system", relax the corresponding directive with a drop-in (`systemctl edit <unit>`) and report which one was needed. File roots, media folders and backup roots outside `/var/lib/nas-manager` need `ReadWritePaths=` in a drop-in for both the web and the worker unit.
 
 ## Upgrading
 
-1. Back up `/var/lib/nas-manager` (see `BACKUP_AND_RESTORE.md`).
-2. Replace application files, reinstall `requirements.txt`.
-3. `sudo systemctl restart nas-manager` (migrations apply automatically), then `sudo systemctl restart nas-manager-worker` if the sync worker is installed.
-4. After upgrading to Phase 9 with ffmpeg installed, videos indexed earlier are probed on their library's next scan (or press **Rescan**).
-5. Phase 13 introduces a 90-day audit retention (see above): set `NAS_AUDIT_RETENTION_DAYS=0` before restarting the worker to keep the full history.
+1. Back up `/var/lib/nas-manager` (see `BACKUP_AND_RESTORE.md`) and keep the previous source tree.
+2. From the new source tree: `sudo deploy/install.sh --with-helper` (omit `--with-helper` if you do not use it). It stops worker, web and helper, replaces the code, updates the virtual environment, keeps `/etc/nas-manager/nas-manager.env` and starts the units that were running, helper first; the web unit applies migrations before it starts.
+3. Run `deploy/smoke_test.py` and compare `deploy/nas-manager.env.example` with your env file for new settings (every setting is listed there).
+4. **Rollback:** stop the units, restore `/var/lib/nas-manager` from the backup (migrations are not downgraded automatically), run `install.sh` from the previous source tree.
+5. After upgrading to Phase 9 with ffmpeg installed, videos indexed earlier are probed on their library's next scan (or press **Rescan**).
+6. Phase 13 introduces a 90-day audit retention (see above): set `NAS_AUDIT_RETENTION_DAYS=0` before restarting the worker to keep the full history.
+7. Phase 14 adds `NAS_TRUSTED_HOSTS`, `NAS_FORWARDED_ALLOW_IPS`, `NAS_HSTS_MAX_AGE_SECONDS` and the drop-folder rate limit. An existing env file keeps working; set `NAS_TRUSTED_HOSTS` to silence the startup warning.
 
 ## Dependency pinning
 
-`requirements.txt` is the full pinned runtime set, generated in a clean virtualenv with `pip freeze`. Regenerate it the same way after changing a dependency. `requirements-dev.txt` adds test and lint tooling. Bootstrap 5.3.8 is vendored in `app/web/static/vendor/bootstrap/` (license included).
+`requirements.txt` is the full pinned runtime set, generated in a clean virtualenv with `pip freeze`. Regenerate it the same way after changing a dependency, then scan it: `.venv/bin/pip-audit -r requirements.txt` (pinned in `requirements-dev.txt`; needs network access to PyPI/OSV). Phase 14 found no known vulnerabilities in either requirements file. `requirements-dev.txt` adds test and lint tooling. Bootstrap 5.3.8 is vendored in `app/web/static/vendor/bootstrap/` (license included).

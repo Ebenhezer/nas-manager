@@ -7,7 +7,7 @@ import signal
 import sys
 from types import FrameType
 
-from app.core.config import get_settings
+from app.core.config import get_settings, tighten_umask
 from app.core.logging import configure_logging
 from app.db.migrations import get_current_revision, get_head_revision
 from app.db.session import Database
@@ -17,6 +17,7 @@ logger = logging.getLogger("app.worker")
 
 
 def main() -> int:
+    tighten_umask()
     settings = get_settings()
     configure_logging(settings)
     settings.ensure_directories()

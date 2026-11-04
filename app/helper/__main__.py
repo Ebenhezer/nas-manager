@@ -12,10 +12,11 @@ import sys
 
 
 def main() -> int:
-    from app.core.config import get_settings
+    from app.core.config import get_settings, tighten_umask
     from app.core.logging import configure_logging
     from app.helper.server import serve
 
+    tighten_umask()
     settings = get_settings()
     configure_logging(settings)
     serve(settings)

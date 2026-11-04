@@ -2,21 +2,33 @@
 Description=NAS Manager privileged helper
 Documentation=file:///opt/nas-manager/docs/INSTALLATION.md
 After=local-fs.target
+# The web unit is ordered after this one, so the socket exists when it starts.
+Before=nas-manager.service
 
 [Service]
 Type=simple
+WorkingDirectory=/opt/nas-manager
 ExecStart=/opt/nas-manager/.venv/bin/python -m app.helper
 EnvironmentFile=/etc/nas-manager/nas-manager.env
 Environment=NAS_HELPER_ENABLED=true
 Environment=NAS_HELPER_SOCKET=/run/nas-manager/helper.sock
+# Same data directory as the other units (smb.conf backups live there).
+Environment=NAS_DATA_DIR=/var/lib/nas-manager
+Environment=NAS_LOG_DIR=/var/log/nas-manager
+Environment=NAS_ENVIRONMENT=production
+# The helper logs to the journal only, under its own identifier.
+Environment=NAS_LOG_TO_FILE=false
+Environment=NAS_SYSLOG_IDENTIFIER=nas-manager-helper
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
 
 # The helper owns the run directory holding the socket; NAS_HELPER_SOCKET_GROUP
-# controls which group may connect through it (default: nas-manager).
+# controls which group may connect through it (default: nas-manager). The
+# directory is traverse-only (0711) so the service account can reach the
+# socket, which itself is 0660 root:<group> and checked with SO_PEERCRED.
 RuntimeDirectory=nas-manager
-RuntimeDirectoryMode=0750
+RuntimeDirectoryMode=0711
 UMask=0027
 
 # The helper runs as root because it must mount/unmount block devices
@@ -24,20 +36,30 @@ UMask=0027
 # /etc/samba. The web unit keeps its strict sandbox; this unit only restricts
 # what does not interfere with those duties. Mount/umount and the md scrub
 # write under /sys, so ProtectKernelTunables/ProtectSystem must stay off here.
+#
+# No option that gives the service its own mount namespace (PrivateTmp,
+# ProtectHome, ProtectKernelModules/Logs, ProtectControlGroups, ReadOnlyPaths,
+# ...): a disk the helper mounts must be visible to Samba, the web unit and
+# the host. Inside a private namespace that depends on mount propagation,
+# which a container or MountFlags=private silently breaks (Phase 14 live test).
 NoNewPrivileges=true
 CapabilityBoundingSet=CAP_SYS_ADMIN CAP_MKNOD CAP_RAWIO CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER CAP_SETGID
-PrivateTmp=true
-ProtectHome=true
 ProtectHostname=true
 ProtectClock=true
-ProtectKernelModules=true
-ProtectControlGroups=true
 RestrictSUIDSGID=true
 RestrictRealtime=true
+RestrictNamespaces=true
 LockPersonality=true
+MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
-SystemCallFilter=@system-service
+# The socket is AF_UNIX; util-linux tools may query udev over AF_NETLINK.
+# The helper never talks to the network.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+IPAddressDeny=any
+# @system-service does not include @mount: mount/umount need it explicitly.
+SystemCallFilter=@system-service @mount
 SystemCallFilter=~@resources
+SystemCallErrorNumber=EPERM
 
 [Install]
 WantedBy=multi-user.target

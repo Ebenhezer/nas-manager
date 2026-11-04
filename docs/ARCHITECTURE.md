@@ -6,9 +6,13 @@
 HTTP request
    │
    ▼
-RequestContextMiddleware   request id, access log, security headers
+RequestContextMiddleware   request id, access log, security headers (+ HSTS on HTTPS)
+   ▼
+TrustedHostMiddleware      Host header allowlist (only when NAS_TRUSTED_HOSTS is set)
    ▼
 CSRFProtectMiddleware      double-submit + session-bound token check
+   ▼
+PublicUploadGuard          POST /public/uploads admission before the body is read
    │
    ├── /api/v1/*   app/api/v1/*      thin routes, no business logic
    │                    │
@@ -35,7 +39,7 @@ Rules: routes validate and delegate; services hold logic and talk to the OS or d
 | `app/worker/` | `python -m app.worker`: the worker loop (`runner.py`: heartbeat, lease renewal/reclaim, scheduling, atomic claiming, run-history pruning; a sync pool, a single-thread media pool for scans and thumbnails, a single-thread transcode pool, single-thread monitor and notify pools, and a single-thread backup pool) |
 | `app/core/config.py` | `Settings` from `NAS_*` variables (incl. sessions, throttling, Argon2id costs) |
 | `app/core/logging.py` | JSON/text formatters, redaction, rotating file handler |
-| `app/core/middleware.py` | Request id, access log (path only, never query string), security headers |
+| `app/core/middleware.py` | Request id, access log (path only, never query string), security headers, HSTS |
 | `app/core/csrf.py` | CSRF protection middleware (double-submit + session-bound) |
 | `app/core/errors.py` | `AppError` hierarchy and the JSON error envelope |
 | `app/core/permissions.py` | Permission-token registry and default role grants |
@@ -74,16 +78,22 @@ Every response carries `X-Request-ID`. A client-supplied id is honoured only if 
 ## Deployment topology
 
 ```
+nginx (TLS, X-Forwarded-For overwritten, limit_req)  deploy/nginx/nas-manager.conf
+   └── 127.0.0.1:8080
 systemd: nas-manager.service        (user nas-manager, no capabilities, sandboxed)
-   └── uvicorn → FastAPI app → SQLite in /var/lib/nas-manager
+   └── uvicorn (proxy headers from NAS_FORWARDED_ALLOW_IPS only) → FastAPI app
+       → SQLite in /var/lib/nas-manager
 systemd: nas-manager-worker.service (user nas-manager, same sandbox, Nice=10)
    └── python -m app.worker → claims sync runs, media scans and transcodes
        from the same database, talks to remote stores, writes inside the
        managed file roots and the media cache, runs ffprobe/ffmpeg
-systemd: nas-manager-helper.service (root, allowlisted operations only)
-   └── Unix socket at /run/nas-manager/helper.sock (0660 root:<group>,
-       SO_PEERCRED uid allowlist) ← the helper_client talks to this
+systemd: nas-manager-helper.service (root, allowlisted operations only,
+                                     host mount namespace)
+   └── Unix socket at /run/nas-manager/helper.sock (0660 root:<group> in a
+       0711 directory, SO_PEERCRED uid allowlist) ← the helper_client talks to this
 ```
+
+`deploy/install.sh` installs this layout (code in `/opt/nas-manager`, configuration in `/etc/nas-manager`), `deploy/uninstall.sh` removes it, `deploy/nas-manager-cli` runs the CLI with the units' environment through `systemd-run`, and `deploy/smoke_test.py` (standard library only) checks a running installation.
 
 The web process never executes arbitrary commands and never runs as root. The helper does the reverse: it is the only process allowed to mount/unmount block devices, read SMART data, write `/etc/samba/smb.conf` + reload `smbd`, start RAID scrubs and run discovery commands (`lsblk`/`findmnt`/`mdadm`); it exposes a fixed allowlist of validated operations and never takes command lines from clients.
 
@@ -183,6 +193,11 @@ any log record ≥ level ──► RemoteLogHandler queue (bounded, non-blocking
 - **Coverage.** `require_permission` audits denials (`auth.permission_denied`, throttled per user, permission and route template). `tests/test_audit_coverage.py` lists every state-changing route with its event or an exemption, so a new unaudited route fails the build.
 - Migration `0013` adds `syslog_destinations`, `audit_events.chain_hash` and an index on `actor_username`. No new permissions.
 
-## Planned additions
+## Security hardening and deployment (Phase 14)
 
-Security hardening and deployment testing (14).
+- **Pre-body admission** (`app/api/v1/public_uploads.py`, `PublicUploadGuardMiddleware`). FastAPI parses a multipart body before any dependency or route code runs, so the drop endpoint's limits are a `BaseHTTPMiddleware` that sees only the headers: the declared `Content-Length`, the uploader identity (the same `_identity` as the route, resolved in a thread with its own session), a `SlidingWindowThrottle` in `app.state.public_upload_throttle` and an advisory quota check. Rejections use the normal error envelope. It sits inside CSRF, and the route's checks remain authoritative.
+- **Throttles** (`app/services/throttle.py`). `SlidingWindowThrottle` (formerly `IpLoginThrottle`, kept as an alias) keys by any string and caps tracked keys, evicting expired then least recently seen keys. One instance each for logins, bearer failures and the drop endpoint; `DenialThrottle` (generic keys) limits how often rejections are audited.
+- **Proxy and Host trust.** `app/__main__.py` passes `proxy_headers`/`forwarded_allow_ips` from `NAS_FORWARDED_ALLOW_IPS` (empty disables proxy headers, since uvicorn would otherwise fall back to its own default) and turns off the `Server` header. `NAS_TRUSTED_HOSTS` adds Starlette's `TrustedHostMiddleware` inside the request-context middleware, so refusals still get a request id and the security headers. `RequestContextMiddleware` adds HSTS only when the effective scheme is HTTPS.
+- **Startup checks.** `production_warnings(settings)` in `app/main.py` lists unsafe production choices and is logged at startup; `tighten_umask()` (`app/core/config.py`) runs first in all three entry points.
+- **Units.** The helper runs in the host mount namespace: a disk mounted inside a private namespace is invisible to Samba, the web unit and the shell when propagation does not reach the host (the live test hit exactly that). It therefore carries only directives that do not create a mount namespace. `prepare_socket_dir` creates a missing socket directory `0711` and never re-modes an existing one (it used to `chmod 0750` whatever directory the socket was configured in).
+- **Tests.** `tests/test_hardening.py` covers the code changes. `tests/test_deploy.py` checks the unit files' sandbox invariants, runs `systemd-analyze verify` and `bash -n` on the scripts, and runs the smoke test against a real uvicorn server. `tests/test_config.py` requires every setting to be documented in both env templates.

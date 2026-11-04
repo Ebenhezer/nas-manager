@@ -29,6 +29,8 @@ RestartSec=10
 # run is reclaimed (marked failed) and the next run resumes from the
 # per-file sync records.
 TimeoutStopSec=300
+LimitNOFILE=16384
+TasksMax=512
 
 StateDirectory=nas-manager
 StateDirectoryMode=0750
@@ -56,6 +58,7 @@ ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
+DevicePolicy=closed
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectKernelLogs=true
@@ -76,6 +79,9 @@ SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+RemoveIPC=true
+KeyringMode=private
 
 [Install]
 WantedBy=multi-user.target

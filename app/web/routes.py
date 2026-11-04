@@ -8,6 +8,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app import __version__
+from app.api.v1.auth import clear_auth_cookies, set_auth_cookies
 from app.api.v1.deps import CurrentUser
 from app.core.errors import UnauthorizedError
 from app.db.dependencies import get_db
@@ -88,24 +89,7 @@ def login_submit(
     )
     if result.ok and result.user is not None and result.raw_session_token is not None:
         response = RedirectResponse("/", status_code=303)
-        response.set_cookie(
-            settings.session_cookie_name,
-            result.raw_session_token,
-            max_age=settings.session_idle_max_seconds,
-            path="/",
-            secure=settings.session_cookie_secure,
-            httponly=True,
-            samesite=settings.session_cookie_samesite,
-        )
-        response.set_cookie(
-            settings.csrf_cookie_name,
-            result.csrf_token or "",
-            max_age=settings.csrf_max_age_seconds,
-            path="/",
-            secure=settings.session_cookie_secure,
-            httponly=False,
-            samesite=settings.session_cookie_samesite,
-        )
+        set_auth_cookies(response, settings, result.raw_session_token, result.csrf_token or "")
         return response
     ctx = _page_context(request, None)
     ctx["error"] = result.error_message or "Invalid username or password"
@@ -121,9 +105,7 @@ def logout_submit(
     if current is not None and current.session is not None:
         auth_service.logout(db, current.session, actor=current.user)
     response = RedirectResponse("/login", status_code=303)
-    settings = request.app.state.settings
-    response.delete_cookie(settings.session_cookie_name, path="/")
-    response.delete_cookie(settings.csrf_cookie_name, path="/")
+    clear_auth_cookies(response, request.app.state.settings)
     return response
 
 

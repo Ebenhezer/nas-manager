@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 from datetime import UTC, datetime
@@ -392,15 +393,25 @@ def _backup_config(config_path: Path, backup_dir: Path) -> str | None:
 
 
 def _atomic_write(config_path: Path, text: str) -> None:
+    """Atomic write that keeps the previous file's mode (``mkstemp`` creates
+    0600 files, which would otherwise replace a world-readable smb.conf)."""
+    tmp_name: str | None = None
     try:
+        mode = 0o644
+        if config_path.exists():
+            mode = stat.S_IMODE(config_path.stat().st_mode)
         config_path.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
         fd, tmp_name = tempfile.mkstemp(
             dir=str(config_path.parent), prefix=".smb.conf.", suffix=".tmp"
         )
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
+        os.chmod(tmp_name, mode)
         os.replace(tmp_name, config_path)
+        tmp_name = None
     except OSError as exc:
+        if tmp_name is not None:
+            Path(tmp_name).unlink(missing_ok=True)
         raise ConfigurationError(
             f"Cannot write the Samba configuration at {config_path} "
             "(the web process is unprivileged; a privileged helper applies it in production)"

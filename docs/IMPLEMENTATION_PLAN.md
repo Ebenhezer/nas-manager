@@ -19,7 +19,7 @@ Status legend: **Done** (implemented and verified), **Next**, **Planned**.
 | 11 | Backup and restore | **Done** |
 | 12 | Configuration export and import | **Done** |
 | 13 | Syslog and comprehensive auditing | **Done** |
-| 14 | Security hardening, deployment testing, documentation | **Next** |
+| 14 | Security hardening, deployment testing, documentation | **Done** |
 
 ## Phase 1: completed
 
@@ -223,13 +223,19 @@ Delivered:
 63. **Logs only see committed events.** Audit log lines are emitted from the session's `after_commit` hook, so a refused or rolled-back action never appears in journald or the log file.
 64. **Native journald without new dependencies.** The journal's datagram protocol is a few lines of stdlib code. With `NAS_LOG_JOURNALD=auto` the console copy is dropped when the native handler is active, so lines are not duplicated.
 65. **Coverage is a test, not a convention.** `tests/test_audit_coverage.py` lists every state-changing route with its event(s) or an exemption reason, so a new unaudited route fails the suite. The sweep found one gap, Google Drive `oauth/start`, now audited as `remote.oauth_started`.
+66. **Admission before parsing.** FastAPI reads a multipart body before dependencies run, so the drop endpoint's rate limit, declared-size cap and quota pre-check live in a middleware that sees only headers. The route's streaming cap and the locked quota check stay authoritative; the middleware only refuses early.
+67. **Rate limits are per uploader, in-process.** The drop limit uses the same key as the quota (`ip:`, `user:`, `token:`), so an authenticated user behind a shared NAT address keeps their own allowance. Like the login and bearer limiters, it is a per-process sliding window with a capped key table; the nginx example adds a per-address limit that survives restarts of the app.
+68. **Trust is explicit.** The proxy list (`NAS_FORWARDED_ALLOW_IPS`) is passed to uvicorn rather than inherited from its defaults, an empty list disables proxy headers, and Host validation and HSTS are opt-in settings that the production template turns on. HSTS is sent only over HTTPS so a plain-HTTP LAN install cannot pin itself by accident.
+69. **The helper lives in the host mount namespace.** Mount-namespace sandboxing (`PrivateTmp`, `ProtectHome`, `ProtectSystem`, ...) made a mount performed by the helper invisible to the host in the live test (container root with private propagation). A mount helper whose mounts others cannot see is broken, so the helper trades those directives for the ones that do not create a namespace (`systemd-analyze security` 4.9 → 4.3 nonetheless).
+70. **The CLI runs through systemd-run.** `deploy/nas-manager-cli` gives `python -m app.cli` exactly the units' account, environment file, paths and umask, which a `sudo -u` invocation cannot (the old instruction acted on a relative `data/` directory).
+71. **Own password changes stay as they are** (decision 19, re-confirmed by the user in Phase 14): other sessions and tokens survive; administrators' resets revoke both.
 
 ## Known limitations
 
 - The management UI (including the gallery and video player) was exercised via TestClient and curl, not a real browser.
 - Only SQLite has been exercised; PostgreSQL support is configuration-only so far.
 - `instance_id` is stored but not yet used by any feature.
-- The per-IP login limiter is in-process (single process; resets on restart). The account lockout is persistent in the database.
+- The per-IP login limiter and the drop-folder rate limit (Phase 14) are in-process (single process; reset on restart). The account lockout is persistent in the database.
 - The bearer-failure throttle and the per-upload resumable lock are in-process; a multi-process deployment needs shared state for both.
 - The sync journal records only changes made through the application; edits over Samba or directly on disk are not journaled (clients should re-list periodically).
 - Auditing and syslog (Phase 13): plain syslog has no delivery acknowledgement (RELP is not supported), so a collector that crashes mid-batch can lose that batch; mutual-TLS client certificates are not supported; application-log forwarding is best effort and drops records when its queue is full (counted on the Logging page); a destination that keeps failing holds back audit pruning; the hash chain is tamper-evident, not tamper-proof (a database writer can recompute it); on PostgreSQL, transactions that commit out of id order can show up as "unsealed event inside the sealed range"; audit events written while the worker is down are sealed and forwarded when it starts again; `POST /media/sync/lookup` may create a user's personal library row without an audit event.
@@ -241,7 +247,7 @@ Delivered:
 - `smbd` reload is performed by the Phase 5 helper when `NAS_HELPER_ENABLED=true`; without the helper the web process still writes where it can and reports `reload_required`.
 - The file manager has no per-share or per-user folder permissions yet; access is governed by the `files:*`/`samba:*` permissions and the operator toggle. Only the helper can mount/umount disks; there is no fstab persistence or auto-mount yet.
 - Media (Phases 8–9): HEIC/HEIF photos are indexed and downloadable but get no thumbnail (Pillow has no HEIF decoder here); albums cannot be shared; personal libraries have no quota; EXIF GPS is shown to everyone who can browse a library and is not stripped from downloads; changes made outside the gallery (file manager, Samba, remote sync) appear only after the next scan (`NAS_MEDIA_SCAN_INTERVAL_MINUTES`); `taken_at` from EXIF is camera wall-clock time without a zone. Video: one progressive MP4 rendition (no HLS/adaptive bitrate, no subtitles or multiple audio tracks), one transcode at a time per worker, and transcode progress is reported only when the duration is known.
-- Anonymous public-upload quotas are keyed by client IP (`ip:`) — NAT/proxies coalesce addresses and botnets can fragment them; API-token clients get their own `token:<id>` quota (Phase 6). The anonymous drop endpoint is not rate limited yet. Uploads are also served on whatever interface the app binds; a public deployment must put the drop page behind TLS and (optionally) a rate limit.
+- Anonymous public-upload quotas are keyed by client IP (`ip:`) — NAT/proxies coalesce addresses and botnets can fragment them; API-token clients get their own `token:<id>` quota (Phase 6). The drop endpoint is rate limited per uploader since Phase 14 (in-process; the nginx example adds a per-address limit).
 
 ## Phase 5: completed
 
@@ -569,4 +575,57 @@ Delivered:
 - **No real collector software:** delivery was tested against loopback Python receivers (UDP, TCP, and TLS with a generated CA), not rsyslog, syslog-ng or Graylog. The rsyslog example in INSTALLATION.md is untested.
 - **journald:** the native protocol was tested against a bound datagram socket. Entries were not checked in a real journal under the systemd units.
 - The Postman collection planned for this phase was not produced: `docs/postman/` is empty in this workspace (the earlier phases' collections are missing too).
+- PostgreSQL is still not exercised.
+
+## Phase 14: completed
+
+Delivered:
+
+- **Drop-folder admission before the body is read** (`PublicUploadGuardMiddleware`): declared `Content-Length` above the per-file cap → 413 `payload_too_large`; per-uploader rate limit (`NAS_PUBLIC_UPLOAD_RATE_MAX_REQUESTS` / `_WINDOW_SECONDS`, default 30 per 5 minutes) → 429 with `Retry-After` and one `public_upload.rate_limited` audit event per window; no quota left → 413 before anything is written.
+- **Throttles**: `SlidingWindowThrottle` (alias `IpLoginThrottle`) with a capped key table; `DenialThrottle` takes any hashable key.
+- **Proxy and Host trust**: `NAS_FORWARDED_ALLOW_IPS` passed explicitly to uvicorn (empty disables proxy headers), `NAS_TRUSTED_HOSTS` (Starlette `TrustedHostMiddleware`), no `Server` header.
+- **Headers**: `Permissions-Policy`, `Cross-Origin-Opener-Policy`, `Cross-Origin-Resource-Policy`, HSTS on HTTPS (`NAS_HSTS_MAX_AGE_SECONDS`).
+- **Fixes found by review**: the CSRF middleware buffered whole multipart bodies in memory before refusing them (now only small urlencoded forms are read); logout cleared cookies without `Secure`/`SameSite`; the fallback `smb.conf` writer replaced the file with a `0600` one.
+- **Production warnings** for debug mode, empty trusted hosts, `NAS_FORWARDED_ALLOW_IPS=*` and an unlimited drop folder; umask at least `027` in every entry point.
+- **Fixes found by the live deployment** (none was visible to the mocked tests):
+  1. `/run/nas-manager` was `0750 root:root`, so the service account could not reach the helper socket ("helper probe failed"). The helper also re-moded whatever directory held the socket. Now systemd creates it `0711`, and the helper never re-modes an existing directory.
+  2. The helper's `SystemCallFilter=@system-service` excludes `@mount`, so mounting would have been killed. `@mount` was added.
+  3. The helper mounted inside its private mount namespace; the mount was invisible to the host. The helper now runs in the host namespace (decision 69).
+  4. `findmnt --target` matched the file system containing any existing directory, so every pre-existing mount point was refused as "already in use". The check now uses `--mountpoint`.
+  5. The helper unit had no `WorkingDirectory`/`NAS_DATA_DIR`, so it would have used `/data`. It also wrote a log file into the web unit's log directory. Now it logs to the journal only.
+  6. The documented `sudo -u nas-manager … app.cli bootstrap-admin` acted on a relative `data/` directory. It is replaced by `deploy/nas-manager-cli`.
+  7. `http2 on;` in the nginx example needs nginx 1.25.1+; Ubuntu 24.04 ships 1.24.
+  8. The smoke test's cookie jar dropped Secure cookies over loopback HTTP.
+- **Deployment artifacts**:
+  - `deploy/install.sh` (idempotent install/upgrade; never overwrites the env file) and `deploy/uninstall.sh` (keeps data; `--purge --yes` removes everything).
+  - `deploy/nas-manager-cli` and `deploy/smoke_test.py` (stdlib; HTTP, headers, Host check, login, helper, unit users and capabilities, socket mode, journal).
+  - `deploy/nginx/nas-manager.conf`.
+  - Hardened units; both env templates now document every setting (test-enforced).
+- **Tooling**: `pip-audit==2.10.1` (no known vulnerabilities in `requirements.txt` or `requirements-dev.txt`); coverage configuration; `deploy/smoke_test.py` under mypy strict.
+- **Docs**: Installation rewritten for the installer, reverse proxy, firewall, smoke test, upgrade/rollback and uninstall. Security, architecture, API, backup/restore (CLI wrapper), README and master plan updated.
+
+### Verification (executed in this workspace, Python 3.12.3, Ubuntu 24.04 container on WSL2 with systemd 255)
+
+| Check | Result |
+|-------|--------|
+| `pytest` (with coverage) | 865 passed, 1 skipped (820 after Phase 13; +45 in `test_hardening.py`, `test_deploy.py`, `test_config.py` and `test_helper.py`); branch coverage of `app/` 89 %. The skip is the unreadable-file test, which cannot work as root. An earlier full run had 1 failure from a test edited mid-run; the final run is the one recorded. |
+| `ruff check` / `ruff format --check` / `mypy` (strict, 226 source files incl. `deploy/smoke_test.py`) | clean |
+| Migrations | no new migration; `alembic upgrade head` 0001–0013 applied by the live unit's `ExecStartPre` on an empty `/var/lib/nas-manager` |
+| `pip-audit -r requirements.txt` / `-r requirements-dev.txt` | no known vulnerabilities |
+| `systemd-analyze verify` | no directive errors for any unit (only the expected missing `/opt` binaries before installation) |
+| `systemd-analyze security` | web 1.4, worker 1.4 (unchanged; the added directives are not scored), helper 4.9 → 4.3 |
+| Live install (`install.sh --with-helper`, then two upgrade runs) | user/group created; `/opt` root-owned, `0644`/`0755`; env file `0640 root:nas-manager` created once and kept on upgrades; units stopped worker → web → helper and restarted helper → web → worker; migrations applied |
+| Live smoke test (`smoke_test.py --login admin`, password from stdin) | **35/35**: health, 7 security headers, no `Server`, docs 404, anonymous 401, unknown Host 400, login, HttpOnly + Secure cookie, `/auth/me`, disk discovery through the helper, logout and revocation; web and worker uid `nas-manager`, `CapEff=0`, `NoNewPrivs=1`; helper root; socket `0660 root:nas-manager`; journal entries for all three |
+| Live helper mount (64 MiB ext4 image on a fresh loop device) | confirm missing → 400, wrong intent → 400, preview → confirm → mounted and visible on the host (`findmnt`), unmount preview → confirm → gone; `disk.mounted`/`disk.unmounted` audited; loop device detached afterwards |
+| nginx 1.24 in front (scratch prefix, self-signed certificate) | `nginx -t` ok; HTTP/2 + HSTS over TLS; HTTP → 301; spoofed `X-Forwarded-For` replaced by the real address in the audit log; `limit_req` → 429 after the burst; app limiter → 429 with `Retry-After` after 30 uploads; one `public_upload.rate_limited` event |
+| Lifecycle | start/restart/stop cycles record `system.started`/`system.stopped` for web and worker; no ERROR lines or tracebacks in the journals or log files (warnings: expected rejections, `smartctl` not installed) |
+| Uninstall | plain uninstall kept data, config and user; reinstall onto the kept data passed the smoke test (35/35); `--purge` without `--yes` refused; `--purge --yes` removed user, group, units, `/opt`, `/etc`, `/var/lib`, `/var/log` |
+| `bootstrap-admin` through `nas-manager-cli` | admin created in `/var/lib/nas-manager/nas.db` (`0640 nas-manager`); interactive `--pty` mode checked with `systemd-run` separately |
+
+### Not verified
+
+- **No real browser.** The new headers (COOP, CORP, Permissions-Policy) were checked on responses only. That includes video playback and the OAuth redirect.
+- **No JavaScript syntax check** (user decision): esprima 4.0.1 cannot parse the ES2020 syntax used, and there is no Node runtime.
+- **Not a stock Ubuntu host.** The environment is a Docker Desktop container running systemd. The root mount's private propagation here is what exposed bug 3 above. Real disks, SMART (`smartctl` not installed), RAID scrubs, Samba reloads (`smbcontrol`) and ffmpeg under the worker sandbox were not exercised live.
+- **TLS proxy test used a scratch nginx and certificate** on high ports, not the system nginx with a real certificate. The ufw rules are untested.
 - PostgreSQL is still not exercised.

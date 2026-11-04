@@ -106,6 +106,7 @@ SAMBA_CONFIG_APPLIED = "samba.config.applied"
 # public upload events (Phase 4)
 PUBLIC_UPLOAD_UPLOADED = "public_upload.uploaded"
 PUBLIC_UPLOAD_REJECTED = "public_upload.rejected"
+PUBLIC_UPLOAD_RATE_LIMITED = "public_upload.rate_limited"
 PUBLIC_UPLOAD_QUOTA_CHANGED = "public_upload.quota_changed"
 PUBLIC_UPLOAD_FILE_DELETED = "public_upload.file_deleted"
 PUBLIC_UPLOAD_CLEANUP = "public_upload.cleanup"

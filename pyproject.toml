@@ -24,7 +24,7 @@ select = ["E", "F", "W", "I", "UP", "B", "S", "SIM", "C4", "RUF"]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
-files = ["app", "tests"]
+files = ["app", "tests", "deploy/smoke_test.py"]
 
 [[tool.mypy.overrides]]
 module = "alembic.*"
@@ -35,3 +35,12 @@ testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-ra --strict-markers"
 filterwarnings = ["error"]
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_also = ["if TYPE_CHECKING:", "if __name__ == .__main__.:"]

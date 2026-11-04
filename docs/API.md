@@ -18,10 +18,11 @@ Base path: `/api/v1`. All responses are JSON. Interactive docs (`/api/docs`) are
 }
 ```
 
-Codes in use: `http_error` (404, 405, ...), `validation_error` (422), `conflict` (409), `not_found` (404), `bad_request` (400), `unauthorized` (401), `forbidden` (403), `too_many_requests` (429), `csrf_failure` (403), `quota_exceeded` (413), `service_unavailable` (503), `internal_error` (500).
+Codes in use: `http_error` (404, 405, ...), `validation_error` (422), `conflict` (409), `not_found` (404), `bad_request` (400), `unauthorized` (401), `forbidden` (403), `too_many_requests` (429), `csrf_failure` (403), `quota_exceeded` (413), `payload_too_large` (413), `service_unavailable` (503), `internal_error` (500). A request whose `Host` is not in `NAS_TRUSTED_HOSTS` (when set) gets a plain-text `400 Invalid host header`.
+- Security headers on every response: `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, `Permissions-Policy`, `Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Resource-Policy: same-origin`, and `Strict-Transport-Security` over HTTPS when `NAS_HSTS_MAX_AGE_SECONDS > 0`. Cross-origin pages cannot embed or fetch API responses or media streams.
 
 - **Authentication**: except `GET /health`, `GET /info`, the public upload endpoints, the `/public/upload` page and the static assets, every endpoint requires either a session cookie (`nas_session`, `HttpOnly`) obtained from `POST /auth/login` (JSON) or the `/login` form, **or** a personal API token sent as `Authorization: Bearer nas_…` (see [API tokens](#api-tokens)). When an `Authorization` header is present it is authoritative: an invalid, expired, revoked or non-Bearer value returns `401` with `WWW-Authenticate: Bearer` even if a valid session cookie is also sent. Anonymous calls return `401`; an authenticated caller without the required permission returns `403`.
-- **CSRF**: state-changing requests that carry browser cookies must echo the `nas_csrf` cookie value via the `X-CSRF-Token` header (or the `_csrf` form field). Authenticated requests must echo the token bound to the session. Cookie-less clients and requests carrying `Authorization: Bearer` are not CSRF-checked (browsers cannot attach that header cross-site without CORS, which is never enabled).
+- **CSRF**: state-changing requests that carry browser cookies must echo the `nas_csrf` cookie value via the `X-CSRF-Token` header (or the `_csrf` field of a small urlencoded form; multipart requests must use the header). Authenticated requests must echo the token bound to the session. Cookie-less clients and requests carrying `Authorization: Bearer` are not CSRF-checked (browsers cannot attach that header cross-site without CORS, which is never enabled).
 - Role and group fields use summary objects; `roles`/`groups` are returned with their nested summaries.
 
 ## Public endpoints
@@ -207,7 +208,7 @@ The drop folder is **upload-only**: there is no public listing, download or sear
 {"id": 3, "uploader_key": "ip:203.0.113.9", "filename": "report (1).pdf", "size_bytes": 2048, "created_at": "2026-10-22T12:00:00"}
 ```
 
-Colliding names are auto-uniquified (`report (1).pdf`); nothing is ever overwritten and the response reports the final name. Errors: `400` (name/cap), `403` (disabled), `413 quota_exceeded` (per-uploader quota exhausted). Cookie-less clients need no CSRF token; browsers must echo the `nas_csrf` cookie.
+Colliding names are auto-uniquified (`report (1).pdf`); nothing is ever overwritten and the response reports the final name. Errors: `400` (name, or the per-file cap exceeded while streaming), `401` (invalid bearer token), `403` (disabled), `413 payload_too_large` (declared `Content-Length` above the per-file cap, refused before the body is read; `details.max_file_bytes`), `413 quota_exceeded` (per-uploader quota exhausted, also checked before the body is read), `429 too_many_requests` with `Retry-After` (more than `NAS_PUBLIC_UPLOAD_RATE_MAX_REQUESTS` uploads per uploader in `NAS_PUBLIC_UPLOAD_RATE_WINDOW_SECONDS`, default 30 per 5 minutes; the first rejection per window is audited as `public_upload.rate_limited`). Cookie-less clients need no CSRF token; browsers must echo the `nas_csrf` cookie in `X-CSRF-Token`.
 
 ### Admin (`uploads:read` / `uploads:write`)
 
@@ -583,6 +584,6 @@ Import semantics: `merge` creates and updates; `replace` additionally deletes Sa
 
 Audited (category `config`): `config.exported` (whether secrets were included and object counts), `config.import_previewed`, `config.imported`, `config.import_refused` (outcome `failure`) and `config.rolled_back`. Passphrases and secrets never appear in audit details.
 
-## Planned
+## Deployment checks (Phase 14)
 
-Security hardening and deployment testing (14). Each phase will extend this document.
+Phase 14 added no endpoints. `deploy/smoke_test.py` uses `GET /health`, `GET /login`, `GET /api/docs` (expects 404), `GET /auth/me` (expects 401 anonymously), an unknown `Host` (expects 400 when trusted hosts are set) and, with `--login`, `POST /auth/login`, `GET /auth/me`, `GET /disks` (through the helper) and `POST /auth/logout`.

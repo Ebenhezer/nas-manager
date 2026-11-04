@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import re
 from pathlib import Path
 
 import pytest
@@ -125,4 +127,46 @@ def test_production_env_template_does_not_override_unit_paths() -> None:
         for line in (PROJECT_ROOT / "deploy/nas-manager.env.example").read_text().splitlines()
         if line and not line.startswith("#")
     ]
-    assert not any(line.startswith(("NAS_DATA_DIR", "NAS_LOG_DIR")) for line in active)
+    # The units set these per process; EnvironmentFile= would override them.
+    unit_owned = (
+        "NAS_DATA_DIR",
+        "NAS_LOG_DIR",
+        "NAS_ENVIRONMENT",
+        "NAS_LOG_FILE_NAME",
+        "NAS_LOG_TO_FILE",
+        "NAS_SYSLOG_IDENTIFIER",
+    )
+    assert not any(line.split("=", 1)[0] in unit_owned for line in active)
+
+
+@pytest.mark.parametrize("template", [".env.example", "deploy/nas-manager.env.example"])
+def test_env_templates_document_every_setting(template: str) -> None:
+    """Every setting appears in both templates (active or as a commented default)."""
+    from app.db.migrations import PROJECT_ROOT
+
+    text = (PROJECT_ROOT / template).read_text()
+    documented = set(re.findall(r"\bNAS_[A-Z0-9_]+", text))
+    missing = {f"NAS_{name.upper()}" for name in Settings.model_fields} - documented
+    assert not missing, sorted(missing)
+
+
+def test_host_lists_are_normalised_and_validated() -> None:
+    s = make(trusted_hosts=" nas.example.org, localhost ,nas.example.org")
+    assert s.trusted_host_list == ["nas.example.org", "localhost"]
+    assert make().trusted_host_list == []
+    with pytest.raises(ValidationError):
+        make(trusted_hosts="bad host")
+    with pytest.raises(ValidationError):
+        make(forwarded_allow_ips="10.0.0.1;rm")
+
+
+def test_tighten_umask_never_loosens() -> None:
+    from app.core.config import tighten_umask
+
+    previous = os.umask(0o022)
+    try:
+        assert tighten_umask() == 0o027
+        os.umask(0o077)
+        assert tighten_umask() == 0o077
+    finally:
+        os.umask(previous)
