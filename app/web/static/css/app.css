@@ -14,6 +14,34 @@ dd {
   overflow-wrap: anywhere;
 }
 
+/* ---------- Secondary buttons: tonal, not grey outline ---------- */
+/* A tinted surface with full-strength text reads as clickable; disabled
+   buttons go transparent so they still look different. */
+:root {
+  --app-btn-tonal-hover: #dfe3e8;
+}
+
+[data-bs-theme="dark"] {
+  --app-btn-tonal-hover: #3a3f45;
+}
+
+.btn-outline-secondary {
+  --bs-btn-color: var(--bs-emphasis-color);
+  --bs-btn-bg: var(--bs-secondary-bg);
+  --bs-btn-border-color: var(--bs-border-color);
+  --bs-btn-hover-color: var(--bs-emphasis-color);
+  --bs-btn-hover-bg: var(--app-btn-tonal-hover);
+  --bs-btn-hover-border-color: var(--bs-secondary-color);
+  --bs-btn-active-color: var(--bs-primary-text-emphasis);
+  --bs-btn-active-bg: var(--bs-primary-bg-subtle);
+  --bs-btn-active-border-color: var(--bs-primary-border-subtle);
+  --bs-btn-disabled-color: var(--bs-secondary-color);
+  --bs-btn-disabled-bg: transparent;
+  --bs-btn-disabled-border-color: var(--bs-border-color-translucent);
+  --bs-btn-focus-shadow-rgb: var(--bs-primary-rgb);
+  font-weight: 500;
+}
+
 /* ---------- Login page ---------- */
 /* Full-viewport centered layout; theme-aware via Bootstrap 5.3 CSS variables. */
 body.login-page {

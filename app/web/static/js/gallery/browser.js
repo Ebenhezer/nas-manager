@@ -302,8 +302,7 @@ function renderChips() {
   }
   const count = active.filter(([key]) => key !== "q" && key !== "recursive").length;
   const button = document.getElementById("mx-filter-button");
-  button.classList.toggle("btn-outline-secondary", !count);
-  button.classList.toggle("btn-secondary", Boolean(count));
+  button.classList.toggle("active", Boolean(count));
   button.lastChild.textContent = count ? ` Filter (${count})` : " Filter";
   chips.classList.toggle("d-none", !active.length);
 }
