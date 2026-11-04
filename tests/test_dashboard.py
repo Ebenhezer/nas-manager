@@ -142,13 +142,16 @@ def test_remote_sync_page_has_every_element_its_script_uses(page: TestClient) ->
 
 
 def test_gallery_page_has_every_element_its_script_uses(page: TestClient) -> None:
-    """gallery.js looks elements up by id; the admin view must render all of them."""
+    """gallery.js and its modules look elements up by id; the admin view must
+    render all of them."""
     import re
 
     response = page.get("/gallery")
     assert response.status_code == 200
     html = response.text
-    script = (STATIC_DIR / "js" / "gallery.js").read_text()
+    modules = sorted((STATIC_DIR / "js" / "gallery").glob("*.js"))
+    sources = [STATIC_DIR / "js" / "gallery.js", *modules]
+    script = "\n".join(path.read_text() for path in sources)
     ids = set(re.findall(r'getElementById\("([a-z0-9-]+)"\)', script))
     assert ids, "expected getElementById lookups"
     missing = sorted(i for i in ids if f'id="{i}"' not in html)
@@ -268,6 +271,16 @@ def test_viewer_dashboard_has_no_alert_card(app: object, admin_user: object) -> 
         "/static/js/public_upload.js",
         "/static/js/remote_sync.js",
         "/static/js/gallery.js",
+        "/static/js/gallery/actions.js",
+        "/static/js/gallery/admin.js",
+        "/static/js/gallery/browser.js",
+        "/static/js/gallery/dialogs.js",
+        "/static/js/gallery/menu.js",
+        "/static/js/gallery/state.js",
+        "/static/js/gallery/tree.js",
+        "/static/js/gallery/uploads.js",
+        "/static/js/gallery/util.js",
+        "/static/js/gallery/viewer.js",
         "/static/js/monitoring.js",
         "/static/js/alerts.js",
         "/static/vendor/bootstrap/bootstrap.min.css",

@@ -412,7 +412,7 @@ Permissions: `media:read` (browse), `media:write` (upload to and delete from you
 
 **Items**
 
-- `GET /media/items` (`media:read`) — query `library_id`, `q` (file name, folder, camera; case-insensitive, wildcards literal), `kind=image|video`, `date_from`, `date_to` (ISO datetimes against `taken_at`), `camera`, `album_id` (one of your albums), `has_gps`, `sort=taken_desc|taken_asc|name|size_desc`, `limit` (≤ `NAS_MEDIA_SEARCH_LIMIT`), `offset` → `{"items": [MediaItem], "total", "limit", "offset"}`.
+- `GET /media/items` (`media:read`) — query `library_id`, `q` (file name, folder, camera; case-insensitive, wildcards literal), `kind=image|video`, `date_from`, `date_to` (ISO datetimes against `taken_at`), `camera`, `album_id` (one of your albums), `has_gps`, `sort=taken_desc|taken_asc|name|size_desc` (more below), `limit` (≤ `NAS_MEDIA_SEARCH_LIMIT`), `offset` → `{"items": [MediaItem], "total", "limit", "offset"}`.
 - `MediaItem`: `{"id", "library_id", "rel_path", "name", "kind", "mime", "size", "sha256", "width", "height", "taken_at", "camera_make", "camera_model", "orientation", "gps_lat", "gps_lon", "duration_seconds", "video_codec", "audio_codec", "container", "bitrate", "rotation", "playback", "thumb_state": "pending"|"ready"|"failed"|"unsupported", "thumb_error", "indexed_at"}`. `taken_at` is EXIF `DateTimeOriginal` (camera wall clock, no zone) or the file's mtime (UTC). `width`/`height` are the displayed size (EXIF/video rotation applied).
 - `GET /media/items/{id}` → `MediaItem`.
 - `GET /media/items/{id}/thumbnail?size=small|large` → `image/webp` (320/1280 px, upright), `Cache-Control: private, max-age=86400`. Rendered on demand if the worker has not yet; 404 when none can be made (`details.thumb_state`).
@@ -434,6 +434,22 @@ Permissions: `media:read` (browse), `media:write` (upload to and delete from you
 - `POST /media/albums/{id}/items` / `DELETE /media/albums/{id}/items` — `{"item_ids": [...]}` (≤ 1000) → `{"changed": n}`. Adding an item you cannot browse → 404.
 
 Audited under category `media`: `media.library_created/updated/deleted/groups_changed`, `media.scan_queued`, `media.item_uploaded/downloaded/deleted`, `media.album_created/updated/deleted/items_changed`.
+
+**Explorer: folders, favorites and bulk actions (Phase 15)**
+
+- `GET /media/items` also takes `folder` (with `library_id`; `""` is the top level) and `recursive=true` (include subfolders), `favorites=true`, `min_size`/`max_size` (bytes), `orientation=landscape|portrait|square` (displayed size) and `indexed_after` (ISO). `sort` also accepts `name_desc`, `size_asc`, `modified_desc`, `modified_asc` (file mtime), `type`, `duration_desc`, `duration_asc` (photos last). `MediaItem` gains `is_favorite` (starred by the caller).
+- `GET /media/facets` (`media:read`) — same `library_id`, `folder`, `recursive`, `kind`, `album_id`, `favorites` → `{"total", "images", "videos", "total_bytes", "first_taken_at", "last_taken_at", "cameras": [{"name", "count"}]}`. A camera `name` can be passed back as `camera`.
+- `GET /media/libraries/{id}/folders?path=` (`media:read`) → `{"library_id", "path", "writable", "folders": [{"name", "path", "item_count", "cover_item_id", "latest_taken_at"}]}`. Lists the immediate subfolders, merging indexed folders with the folders on disk (so empty ones appear; hidden ones do not). `item_count` counts everything below the folder.
+- `POST /media/libraries/{id}/folders` (`media:write`, own personal library) — `{"path"}` → 201 folder; exists → 409; hidden or traversal → 400.
+- `PATCH /media/libraries/{id}/folders` — `{"path", "new_name"}` → the renamed folder; target exists → 409. Items below it keep their ids (albums, favorites and thumbnails follow).
+- `DELETE /media/libraries/{id}/folders?path=` → 204; only empty folders (409 otherwise); the top level → 400.
+- `POST /media/items/move` (`media:write`) — `{"item_ids", "library_id", "folder"}` → `{"changed": n}`. Moves within the caller's personal library only (shared libraries → 403); the folder is created if missing; a name clash becomes `name (1).ext`.
+- `PATCH /media/items/{id}` (`media:write`) — `{"name"}` → `MediaItem`. The extension must stay the same (400); clash → 409.
+- `POST /media/items/delete` (`media:write`) — `{"item_ids"}` (≤ 1000) → `{"changed", "failed": [{"item_id", "message"}]}`.
+- `GET /media/items/zip?ids=1,2,3` (`media:read`) → `application/zip` attachment (entries stored, duplicate names numbered). At most 1000 items and `NAS_MEDIA_ZIP_MAX_BYTES` (default 4 GiB) in total (400 otherwise).
+- `POST /media/favorites` (`media:read`) — `{"item_ids", "favorite": true|false}` → `{"changed": n}`. Favorites are private; items you cannot browse are skipped.
+
+Moves and renames add a `deleted` (old path) and a `created` (new path) entry to the sync change feed. Further audit events: `media.items_downloaded`, `media.items_moved`, `media.item_renamed`, `media.folder_created/renamed/deleted`.
 
 ## Video playback and streaming (Phase 9)
 

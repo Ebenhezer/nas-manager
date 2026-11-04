@@ -228,6 +228,8 @@ class Settings(BaseSettings):
     media_scan_interval_minutes: int = Field(default=60, ge=0, le=7 * 24 * 60)
     media_thumbnail_batch: int = Field(default=50, ge=1, le=10_000)
     media_search_limit: int = Field(default=500, ge=10, le=10_000)
+    # Largest ZIP the gallery builds for a multi-item download (Phase 15).
+    media_zip_max_bytes: int = Field(default=4 * _GIB, ge=1024 * 1024)
     media_scan_lease_seconds: int = Field(default=600, ge=30, le=86400)
 
     # ------------------------------------------------------------------

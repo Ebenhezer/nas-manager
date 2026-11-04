@@ -11,7 +11,7 @@ directory, keyed by item id and a fingerprint of the file's size and mtime.
 ``MediaAlbum`` rows are per-user collections of items, and ``MediaChange``
 is the journal mobile clients follow to mirror a library. ``MediaTranscode``
 (Phase 9) tracks the cached browser-compatible MP4 of a video that cannot be
-played directly.
+played directly. ``MediaFavorite`` (Phase 15) marks the items a user starred.
 """
 
 from __future__ import annotations
@@ -212,6 +212,22 @@ class MediaAlbumItem(Base):
     )
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     added_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow_naive, server_default=func.now()
+    )
+
+
+class MediaFavorite(Base):
+    """An item one user starred; private to that user, like albums."""
+
+    __tablename__ = "media_favorites"
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    item_id: Mapped[int] = mapped_column(
+        ForeignKey("media_items.id", ondelete="CASCADE"), primary_key=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow_naive, server_default=func.now()
     )
 

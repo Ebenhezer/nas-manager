@@ -85,6 +85,12 @@ ROUTE_EVENTS: dict[str, tuple[str, ...]] = {
     "DELETE /api/v1/media/albums/{album_id}": (A.MEDIA_ALBUM_DELETED,),
     "POST /api/v1/media/albums/{album_id}/items": (A.MEDIA_ALBUM_ITEMS_CHANGED,),
     "DELETE /api/v1/media/albums/{album_id}/items": (A.MEDIA_ALBUM_ITEMS_CHANGED,),
+    "POST /api/v1/media/libraries/{library_id}/folders": (A.MEDIA_FOLDER_CREATED,),
+    "PATCH /api/v1/media/libraries/{library_id}/folders": (A.MEDIA_FOLDER_RENAMED,),
+    "DELETE /api/v1/media/libraries/{library_id}/folders": (A.MEDIA_FOLDER_DELETED,),
+    "POST /api/v1/media/items/move": (A.MEDIA_ITEMS_MOVED,),
+    "PATCH /api/v1/media/items/{item_id}": (A.MEDIA_ITEM_RENAMED,),
+    "POST /api/v1/media/items/delete": (A.MEDIA_ITEM_DELETED,),
     "POST /api/v1/alerts/{alert_id}/acknowledge": (A.ALERT_ACKNOWLEDGED,),
     "POST /api/v1/alert-rules": (A.ALERT_RULE_CREATED,),
     "PATCH /api/v1/alert-rules/{rule_id}": (A.ALERT_RULE_UPDATED,),
@@ -121,6 +127,7 @@ EXEMPT: dict[str, str] = {
     "POST /api/v1/storage/raid/{name}/scrub/preview": "read-only preview, changes nothing",
     "POST /api/v1/remotes/sftp/host-key": "read-only probe; the pinned key is audited on create",
     "POST /api/v1/media/sync/lookup": "read-only hash lookup used by phone backup clients",
+    "POST /api/v1/media/favorites": "private per-user star; changes no files or shared data",
     "PATCH /api/v1/uploads/{upload_id}": (
         "high-volume chunk append to a hidden staging file; creation, completion, abort and "
         "expiry of the upload session are audited"

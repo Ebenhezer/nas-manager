@@ -89,6 +89,8 @@ class MediaItemOut(BaseModel):
     thumb_state: str
     thumb_error: str | None
     indexed_at: datetime
+    # Starred by the caller (Phase 15); filled in by the item routes.
+    is_favorite: bool = False
 
 
 class MediaItemPage(BaseModel):
@@ -130,6 +132,76 @@ class AlbumDetail(AlbumOut):
 
 class AlbumItemsChanged(BaseModel):
     changed: int
+
+
+class ItemIds(BaseModel):
+    item_ids: list[int] = Field(min_length=1, max_length=1000)
+
+
+class FavoriteChange(ItemIds):
+    favorite: bool = True
+
+
+class ItemMove(ItemIds):
+    """Move items into ``folder`` ("" is the library's top level)."""
+
+    library_id: int
+    folder: str = Field(default="", max_length=4096)
+
+
+class ItemRename(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+
+
+class BulkFailure(BaseModel):
+    item_id: int
+    message: str
+
+
+class BulkResult(BaseModel):
+    changed: int
+    failed: list[BulkFailure]
+
+
+class FolderOut(BaseModel):
+    name: str
+    # Relative to the library folder, "/"-separated.
+    path: str
+    # Items anywhere below this folder.
+    item_count: int
+    cover_item_id: int | None
+    latest_taken_at: datetime | None
+
+
+class FolderList(BaseModel):
+    library_id: int
+    path: str
+    writable: bool
+    folders: list[FolderOut]
+
+
+class FolderCreate(BaseModel):
+    path: str = Field(min_length=1, max_length=4096)
+
+
+class FolderRename(BaseModel):
+    path: str = Field(min_length=1, max_length=4096)
+    new_name: str = Field(min_length=1, max_length=255)
+
+
+class CameraFacet(BaseModel):
+    name: str
+    count: int
+
+
+class MediaFacets(BaseModel):
+    total: int
+    images: int
+    videos: int
+    total_bytes: int
+    first_taken_at: datetime | None
+    last_taken_at: datetime | None
+    cameras: list[CameraFacet]
 
 
 class HashLookup(BaseModel):
@@ -208,4 +280,17 @@ class TranscodeQueued(BaseModel):
 
 
 ThumbnailSize = Literal["small", "large"]
-SortOrder = Literal["taken_desc", "taken_asc", "name", "size_desc"]
+SortOrder = Literal[
+    "taken_desc",
+    "taken_asc",
+    "name",
+    "name_desc",
+    "size_desc",
+    "size_asc",
+    "modified_desc",
+    "modified_asc",
+    "type",
+    "duration_desc",
+    "duration_asc",
+]
+Orientation = Literal["landscape", "portrait", "square"]

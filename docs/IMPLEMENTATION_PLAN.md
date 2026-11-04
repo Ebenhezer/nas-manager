@@ -629,3 +629,39 @@ Delivered:
 - **Not a stock Ubuntu host.** The environment is a Docker Desktop container running systemd. The root mount's private propagation here is what exposed bug 3 above. Real disks, SMART (`smartctl` not installed), RAID scrubs, Samba reloads (`smbcontrol`) and ffmpeg under the worker sandbox were not exercised live.
 - **TLS proxy test used a scratch nginx and certificate** on high ports, not the system nginx with a real certificate. The ufw rules are untested.
 - PostgreSQL is still not exercised.
+
+## Phase 15: completed
+
+Explorer-style gallery (`/gallery`, `/videos`).
+
+Delivered:
+
+- **UI** (`gallery.html`, `js/gallery.js` + modules in `js/gallery/`):
+  - Navigation pane: Quick access (All, Favorites, Recently added), a lazily loaded folder tree per library, and albums. Folders and albums accept dropped items.
+  - Address bar with back/up/refresh, breadcrumbs and a search scoped to the current location (it searches subfolders).
+  - Filter panel: type, orientation, date presets/range, camera (from facets), size presets, location. Active filters show as removable chips; an "Include subfolders" switch flattens a folder.
+  - Sort by name, date taken, date modified, size, type or duration, ascending or descending (Details column headers sort too).
+  - Six views: extra large, large, medium and small icons, list, details. The chosen view is kept in `localStorage`.
+  - Location, filters and sort are kept in the URL hash, so back/forward and reload work.
+  - Selection: click, Ctrl/Cmd, Shift ranges, Ctrl+A, rubber band, checkmark overlays. Keyboard: arrows, Enter, Space, F2, Delete, Backspace/Alt+Up, Alt+Left, `/`.
+  - Context menus (right-click, long-press, Shift+F10) and a selection bar: add to/remove from album, album cover, favorite, move (folder picker with "New folder"), rename, ZIP download, delete.
+  - Infinite scroll and a status bar (counts, total size, selection size).
+  - Lightbox: filmstrip, keys and swipes, wheel/pinch/double-click zoom with pan (loads the original when zoomed and the browser can show it), slideshow with interval, full screen, details panel, Back closes it. Video playback and transcode flow unchanged.
+  - Library administration moved into a "Libraries" dialog.
+- **API** (see `docs/API.md`):
+  - Folder listing, create, rename and delete.
+  - Item move and rename, bulk delete, ZIP download (`NAS_MEDIA_ZIP_MAX_BYTES`).
+  - Private favorites (`media_favorites`, migration 0014).
+  - Facets.
+  - New `/media/items` filters (`folder`, `recursive`, `favorites`, size, orientation, `indexed_after`) and seven new sort orders.
+  - Moves and renames keep item ids and journal `deleted` + `created` changes.
+- **Audit**: `media.items_downloaded`, `media.items_moved`, `media.item_renamed`, `media.folder_created/renamed/deleted`. Favorites are exempt (private, no files changed).
+
+### Verification
+
+| Check | Result |
+|-------|--------|
+| `pytest` | 853 passed, 1 skipped (with the 7 `caplog` tests and the audit-coverage test rerun separately: 58 passed). `tests/test_remote_providers.py` could not be collected: `boto3` is not installed in this interpreter. New: `tests/test_media_explorer.py` (10), 0014 round trip. |
+| `ruff check` / `ruff format --check` | clean. `mypy`: no new errors in changed files (the environment's SQLAlchemy stubs report pre-existing errors elsewhere). |
+| JavaScript | parsed with esprima 4.0.1 after mapping `?.`/`??`; named imports checked against exports. |
+| Headless Chromium (Playwright, isolated server on port 8090, scratch data) | Exercised: browse/tree, all views, sort, selection (click/Shift/Ctrl/band/Ctrl+A), favorites, context menus, folder picker move, drag to tree folder, folder rename, item rename (F2), filters/chips, search, album add/remove, details header sort, lightbox (zoom, details, slideshow, Back closes), bulk delete, ZIP download, dark theme, 390 px width (no horizontal overflow), read-only user (no write controls). No console errors. |

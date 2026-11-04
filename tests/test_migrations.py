@@ -106,7 +106,7 @@ def test_current_revision_reports_diverged_rows(migrated_settings: Settings) -> 
         with db.engine.begin() as connection:
             connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('zzz')"))
         current = get_current_revision(db.engine)
-        assert current == "0013,zzz"
+        assert current == "0014,zzz"
         assert current != get_head_revision(migrated_settings)
     finally:
         db.dispose()
@@ -146,7 +146,7 @@ def test_alembic_cli_runs_from_project_root_and_creates_state_dir(
         timeout=60,
         check=False,
     )
-    assert "0013" in current.stdout + current.stderr
+    assert "0014" in current.stdout + current.stderr
 
 
 def test_phase7_downgrade_and_reupgrade(settings: Settings) -> None:
@@ -344,7 +344,7 @@ def test_phase12_downgrade_and_reupgrade(settings: Settings) -> None:
         assert "config_import_runs" not in inspect(db.engine).get_table_names()
         assert grants(db) == set()
         upgrade_to_head(settings)
-        assert get_current_revision(db.engine) == "0013"
+        assert get_current_revision(db.engine) == "0014"
         assert len(grants(db)) == 2
     finally:
         db.dispose()
@@ -375,9 +375,24 @@ def test_phase13_downgrade_and_reupgrade(settings: Settings) -> None:
         assert "syslog_destinations" not in inspector.get_table_names()
         assert "chain_hash" not in {c["name"] for c in inspector.get_columns("audit_events")}
         upgrade_to_head(settings)
-        assert get_current_revision(db.engine) == "0013"
+        assert get_current_revision(db.engine) == "0014"
         with db.engine.connect() as connection:
             count = connection.execute(text("SELECT count(*) FROM audit_events")).scalar_one()
         assert count == 1
+    finally:
+        db.dispose()
+
+
+def test_phase14_downgrade_and_reupgrade(settings: Settings) -> None:
+    """0014 adds the per-user media favorites table."""
+    settings.ensure_directories()
+    upgrade_to_head(settings)
+    db = Database(settings.resolved_database_url)
+    try:
+        assert "media_favorites" in inspect(db.engine).get_table_names()
+        command.downgrade(alembic_config(settings), "0013")
+        assert "media_favorites" not in inspect(db.engine).get_table_names()
+        upgrade_to_head(settings)
+        assert get_current_revision(db.engine) == "0014"
     finally:
         db.dispose()

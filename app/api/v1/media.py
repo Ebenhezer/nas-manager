@@ -3,7 +3,10 @@
 Every route needs ``media:read``; uploads, deletions and album changes need
 ``media:write``; shared-library management needs ``media:admin``. Video
 streaming and on-demand transcodes (Phase 9) need only ``media:read`` plus
-access to the item's library. Item and
+access to the item's library. The explorer-style gallery (Phase 15) adds
+folder listings, ZIP downloads and private favorites (``media:read``) and
+folder/move/rename/bulk-delete operations (``media:write``, own personal
+library only). Item and
 album lookups are filtered by what the caller may browse, so anything else
 is a 404. API tokens work through the usual scope intersection, which is how
 a phone backup client authenticates.
@@ -19,10 +22,11 @@ from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
 
 from app.api.v1.deps import CurrentUser, request_audit_context, require_permission
 from app.core.config import Settings
-from app.core.errors import BadRequestError, ForbiddenError, NotFoundError
+from app.core.errors import AppError, BadRequestError, ForbiddenError, NotFoundError
 from app.db.dependencies import get_db
 from app.models import MediaAlbum, MediaItem, MediaLibrary
 from app.schemas.media import (
@@ -32,8 +36,18 @@ from app.schemas.media import (
     AlbumItemsChanged,
     AlbumOut,
     AlbumUpdate,
+    BulkFailure,
+    BulkResult,
+    FavoriteChange,
+    FolderCreate,
+    FolderList,
+    FolderOut,
+    FolderRename,
     HashLookup,
     HashLookupResult,
+    ItemIds,
+    ItemMove,
+    ItemRename,
     LibraryCounts,
     LibraryCreate,
     LibraryGroups,
@@ -42,9 +56,11 @@ from app.schemas.media import (
     MediaChangeOut,
     MediaChanges,
     MediaCursor,
+    MediaFacets,
     MediaItemOut,
     MediaItemPage,
     MediaStatus,
+    Orientation,
     SortOrder,
     ThumbnailSize,
     TranscodeOut,
@@ -53,8 +69,11 @@ from app.schemas.media import (
 from app.services import audit, remote_sync
 from app.services.media import (
     albums,
+    archive,
     changes,
+    favorites,
     ffmpeg,
+    folders,
     jobs,
     libraries,
     search,
@@ -100,6 +119,26 @@ def _library_out(
         next_scan_at=library.next_scan_at,
         counts=counts,
         created_at=library.created_at,
+    )
+
+
+def _items_out(db: Session, actor: MediaActor, rows: list[MediaItem]) -> list[MediaItemOut]:
+    starred = search.favorite_ids(db, actor, [row.id for row in rows])
+    out = []
+    for row in rows:
+        item = MediaItemOut.model_validate(row)
+        item.is_favorite = row.id in starred
+        out.append(item)
+    return out
+
+
+def _folder_out(row: folders.FolderInfo) -> FolderOut:
+    return FolderOut(
+        name=row.name,
+        path=row.path,
+        item_count=row.item_count,
+        cover_item_id=row.cover_item_id,
+        latest_taken_at=row.latest_taken_at,
     )
 
 
@@ -238,6 +277,93 @@ def scan_library(
     return _one_library_out(db, actor, library)
 
 
+@router.get("/libraries/{library_id}/folders", response_model=FolderList)
+def list_folders(
+    library_id: int,
+    request: Request,
+    path: str = Query(default="", max_length=4096),
+    current: CurrentUser = Depends(require_permission("media:read")),
+    db: Session = Depends(get_db),
+) -> FolderList:
+    """The subfolders of ``path`` ("" = the library's top level)."""
+    actor = actor_of(current)
+    library = libraries.get_browsable_library(db, actor, library_id)
+    rows = folders.list_folders(db, request.app.state.settings, library, path)
+    return FolderList(
+        library_id=library.id,
+        path=search.clean_folder(path),
+        writable=library.is_personal and library.owner_user_id == actor.user.id and actor.can_write,
+        folders=[_folder_out(row) for row in rows],
+    )
+
+
+@router.post("/libraries/{library_id}/folders", response_model=FolderOut, status_code=201)
+def create_folder(
+    library_id: int,
+    payload: FolderCreate,
+    request: Request,
+    current: CurrentUser = Depends(require_permission("media:write")),
+    db: Session = Depends(get_db),
+) -> FolderOut:
+    actor = actor_of(current)
+    path = folders.create_folder(
+        db,
+        request.app.state.settings,
+        actor,
+        libraries.get_browsable_library(db, actor, library_id),
+        payload.path,
+        context=request_audit_context(request),
+    )
+    return _folder_out(folders.FolderInfo(name=path.rsplit("/", 1)[-1], path=path))
+
+
+@router.patch("/libraries/{library_id}/folders", response_model=FolderOut)
+def rename_folder(
+    library_id: int,
+    payload: FolderRename,
+    request: Request,
+    current: CurrentUser = Depends(require_permission("media:write")),
+    db: Session = Depends(get_db),
+) -> FolderOut:
+    actor = actor_of(current)
+    settings: Settings = request.app.state.settings
+    library = libraries.get_browsable_library(db, actor, library_id)
+    path = folders.rename_folder(
+        db,
+        settings,
+        actor,
+        library,
+        payload.path,
+        payload.new_name,
+        context=request_audit_context(request),
+    )
+    parent = path.rsplit("/", 1)[0] if "/" in path else ""
+    match = [row for row in folders.list_folders(db, settings, library, parent) if row.path == path]
+    return _folder_out(
+        match[0] if match else folders.FolderInfo(name=path.rsplit("/", 1)[-1], path=path)
+    )
+
+
+@router.delete("/libraries/{library_id}/folders", status_code=204)
+def delete_folder(
+    library_id: int,
+    request: Request,
+    path: str = Query(min_length=1, max_length=4096),
+    current: CurrentUser = Depends(require_permission("media:write")),
+    db: Session = Depends(get_db),
+) -> None:
+    """Remove an empty folder."""
+    actor = actor_of(current)
+    folders.delete_folder(
+        db,
+        request.app.state.settings,
+        actor,
+        libraries.get_browsable_library(db, actor, library_id),
+        path,
+        context=request_audit_context(request),
+    )
+
+
 @router.get("/status", response_model=MediaStatus)
 def media_status(
     request: Request,
@@ -300,12 +426,21 @@ def search_items(
     camera: str | None = Query(default=None, max_length=64),
     album_id: int | None = Query(default=None),
     has_gps: bool | None = Query(default=None),
+    folder: str | None = Query(default=None, max_length=4096),
+    recursive: bool = Query(default=False),
+    favorites_only: bool = Query(default=False, alias="favorites"),
+    min_size: int | None = Query(default=None, ge=0),
+    max_size: int | None = Query(default=None, ge=0),
+    orientation: Orientation | None = Query(default=None),
+    indexed_after: datetime | None = Query(default=None),
     sort: SortOrder = Query(default="taken_desc"),
     limit: int = Query(default=100, ge=1),
     offset: int = Query(default=0, ge=0),
     current: CurrentUser = Depends(require_permission("media:read")),
     db: Session = Depends(get_db),
 ) -> MediaItemPage:
+    """Matching items. ``folder`` (with ``library_id``) lists one directory,
+    ``recursive`` includes its subfolders; ``favorites`` keeps starred items."""
     settings: Settings = request.app.state.settings
     limit = min(limit, settings.media_search_limit)
     filters = search.SearchFilters(
@@ -317,15 +452,132 @@ def search_items(
         camera=camera or None,
         album_id=album_id,
         has_gps=has_gps,
+        folder=folder,
+        recursive=recursive,
+        favorites=favorites_only,
+        min_size=min_size,
+        max_size=max_size,
+        orientation=orientation,
+        indexed_after=indexed_after.replace(tzinfo=None) if indexed_after else None,
         sort=sort,
     )
-    rows, total = search.search_items(db, actor_of(current), filters, limit=limit, offset=offset)
+    actor = actor_of(current)
+    rows, total = search.search_items(db, actor, filters, limit=limit, offset=offset)
     return MediaItemPage(
-        items=[MediaItemOut.model_validate(row) for row in rows],
+        items=_items_out(db, actor, rows),
         total=total,
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/facets", response_model=MediaFacets)
+def item_facets(
+    library_id: int | None = Query(default=None),
+    folder: str | None = Query(default=None, max_length=4096),
+    recursive: bool = Query(default=False),
+    kind: str | None = Query(default=None, pattern="^(image|video)$"),
+    album_id: int | None = Query(default=None),
+    favorites_only: bool = Query(default=False, alias="favorites"),
+    current: CurrentUser = Depends(require_permission("media:read")),
+    db: Session = Depends(get_db),
+) -> MediaFacets:
+    """Counts, date range and cameras of a location (feeds the filter menus)."""
+    filters = search.SearchFilters(
+        library_id=library_id,
+        kind=kind,
+        album_id=album_id,
+        folder=folder,
+        recursive=recursive,
+        favorites=favorites_only,
+    )
+    return MediaFacets.model_validate(search.facets(db, actor_of(current), filters))
+
+
+@router.get("/items/zip", response_class=FileResponse)
+def download_zip(
+    request: Request,
+    ids: str = Query(min_length=1, max_length=12000, pattern=r"^\d+(,\d+)*$"),
+    current: CurrentUser = Depends(require_permission("media:read")),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    """Several items as one ZIP (``ids`` is a comma-separated list)."""
+    item_ids = [int(value) for value in ids.split(",")]
+    path, items, total = archive.build_zip(
+        db, request.app.state.settings, actor_of(current), item_ids
+    )
+    audit.record_audit_event(
+        db,
+        event=audit.MEDIA_ITEMS_DOWNLOADED,
+        category=audit.CATEGORY_MEDIA,
+        actor=current.user,
+        target_type="media_item",
+        details={"count": len(items), "size": total, "item_ids": [i.id for i in items][:100]},
+        **audit.request_context(request_audit_context(request)),
+    )
+    return FileResponse(
+        path,
+        media_type="application/zip",
+        filename=archive.archive_name(),
+        headers={"Cache-Control": "private, no-store"},
+        background=BackgroundTask(path.unlink, missing_ok=True),
+    )
+
+
+@router.post("/items/move", response_model=AlbumItemsChanged)
+def move_items(
+    payload: ItemMove,
+    request: Request,
+    current: CurrentUser = Depends(require_permission("media:write")),
+    db: Session = Depends(get_db),
+) -> AlbumItemsChanged:
+    """Move items into another folder of their (own, personal) library."""
+    actor = actor_of(current)
+    moved = folders.move_items(
+        db,
+        request.app.state.settings,
+        actor,
+        libraries.get_browsable_library(db, actor, payload.library_id),
+        payload.item_ids,
+        payload.folder,
+        context=request_audit_context(request),
+    )
+    return AlbumItemsChanged(changed=moved)
+
+
+@router.post("/items/delete", response_model=BulkResult)
+def delete_items(
+    payload: ItemIds,
+    request: Request,
+    current: CurrentUser = Depends(require_permission("media:write")),
+    db: Session = Depends(get_db),
+) -> BulkResult:
+    """Delete several items; each one that cannot be deleted is reported."""
+    actor = actor_of(current)
+    settings: Settings = request.app.state.settings
+    deleted = 0
+    failed: list[BulkFailure] = []
+    for item_id in dict.fromkeys(payload.item_ids):
+        try:
+            item = libraries.get_browsable_item(db, actor, item_id)
+            uploads.delete_item(db, settings, actor, item, context=request_audit_context(request))
+        except AppError as error:
+            db.rollback()
+            failed.append(BulkFailure(item_id=item_id, message=error.message))
+            continue
+        deleted += 1
+    return BulkResult(changed=deleted, failed=failed)
+
+
+@router.post("/favorites", response_model=AlbumItemsChanged)
+def set_favorites(
+    payload: FavoriteChange,
+    current: CurrentUser = Depends(require_permission("media:read")),
+    db: Session = Depends(get_db),
+) -> AlbumItemsChanged:
+    """Star or unstar items (private to the caller)."""
+    changed = favorites.set_favorite(db, actor_of(current), payload.item_ids, payload.favorite)
+    return AlbumItemsChanged(changed=changed)
 
 
 @router.get("/items/{item_id}", response_model=MediaItemOut)
@@ -334,7 +586,29 @@ def get_item(
     current: CurrentUser = Depends(require_permission("media:read")),
     db: Session = Depends(get_db),
 ) -> MediaItemOut:
-    return MediaItemOut.model_validate(libraries.get_browsable_item(db, actor_of(current), item_id))
+    actor = actor_of(current)
+    return _items_out(db, actor, [libraries.get_browsable_item(db, actor, item_id)])[0]
+
+
+@router.patch("/items/{item_id}", response_model=MediaItemOut)
+def rename_item(
+    item_id: int,
+    payload: ItemRename,
+    request: Request,
+    current: CurrentUser = Depends(require_permission("media:write")),
+    db: Session = Depends(get_db),
+) -> MediaItemOut:
+    """Rename a file in the caller's personal library (same extension)."""
+    actor = actor_of(current)
+    item = folders.rename_item(
+        db,
+        request.app.state.settings,
+        actor,
+        libraries.get_browsable_item(db, actor, item_id),
+        payload.name,
+        context=request_audit_context(request),
+    )
+    return _items_out(db, actor, [item])[0]
 
 
 @router.get("/items/{item_id}/thumbnail", response_class=FileResponse)

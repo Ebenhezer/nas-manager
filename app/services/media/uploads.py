@@ -73,8 +73,11 @@ def personal_folder(settings: Settings, username: str) -> Path:
     return files.resolve_in_root(settings.resolved_media_dir, username)
 
 
-def _place(staged: Path, directory: Path, name: str) -> Path:
-    """Move ``staged`` to a free name in ``directory`` without ever overwriting."""
+def place_file(staged: Path, directory: Path, name: str) -> Path:
+    """Move ``staged`` to a free name in ``directory`` without ever overwriting.
+
+    Also how the gallery moves an indexed file into another folder.
+    """
     while True:
         final = public_uploads.unique_path(directory, name)
         try:
@@ -107,7 +110,7 @@ def commit_staged(
     try:
         if not directory.resolve().is_relative_to(base):
             raise BadRequestError("Path escapes the library")
-        final = _place(staged, directory, filename)
+        final = place_file(staged, directory, filename)
     except Exception:
         staged.unlink(missing_ok=True)
         raise

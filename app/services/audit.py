@@ -170,6 +170,13 @@ MEDIA_ALBUM_ITEMS_CHANGED = "media.album_items_changed"
 # Video streaming (Phase 9)
 MEDIA_TRANSCODE_REQUESTED = "media.transcode_requested"
 MEDIA_TRANSCODE_FAILED = "media.transcode_failed"
+# Explorer-style gallery (Phase 15)
+MEDIA_ITEMS_DOWNLOADED = "media.items_downloaded"
+MEDIA_ITEMS_MOVED = "media.items_moved"
+MEDIA_ITEM_RENAMED = "media.item_renamed"
+MEDIA_FOLDER_CREATED = "media.folder_created"
+MEDIA_FOLDER_RENAMED = "media.folder_renamed"
+MEDIA_FOLDER_DELETED = "media.folder_deleted"
 
 # Monitoring and alerting (Phase 10)
 ALERT_RULE_CREATED = "alert_rule.created"
