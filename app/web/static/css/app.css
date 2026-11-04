@@ -220,6 +220,19 @@ body.app-page {
   line-height: 1;
 }
 
+.app-theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3rem 0.45rem;
+  line-height: 1;
+}
+
+/* Show the icon for the theme a click switches to. */
+:root[data-bs-theme="dark"] .theme-icon-dark,
+:root[data-bs-theme="light"] .theme-icon-light {
+  display: none;
+}
+
 .app-sidebar-footer {
   margin-top: auto;
   padding: 0.75rem 0 0;
