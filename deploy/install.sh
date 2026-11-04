@@ -4,11 +4,12 @@
 # Installs NAS Manager for the first time, or upgrades an existing install.
 # Run it as root from a checkout of the source tree:
 #
-#   sudo deploy/install.sh [--with-helper] [--start] [--python /usr/bin/python3]
+#   sudo deploy/install.sh [--without-helper] [--start] [--python /usr/bin/python3]
 #
 # Options:
-#   --with-helper   also install the root helper service (needed for disks,
-#                   mounts and Samba); without it the helper is disabled
+#   --without-helper  do not install the root helper service (needed for
+#                   disks, mounts, SMART and Samba); it is installed by
+#                   default, and kept on upgrade once installed
 #   --start         start every service when done (by default only the
 #                   services that were already running are started again)
 #   --python PATH   Python 3.12+ interpreter used to build the virtual
@@ -23,8 +24,12 @@
 #      for the service) and creates or updates its Python virtual
 #      environment from the pinned requirements.txt;
 #   4. creates /etc/nas-manager and installs nas-manager.env from the
-#      template, but ONLY if that file does not exist yet (your existing
-#      configuration is never touched);
+#      template if it does not exist yet, then brings it up to date with
+#      deploy/env_setup.py: settings new in this version are appended, the
+#      helper is enabled and the service account allowed to call it, and (on a
+#      terminal) the host names and HTTPS question are asked while
+#      NAS_TRUSTED_HOSTS is still the template placeholder. Values you set are
+#      never overwritten. The result is validated before anything starts;
 #   5. installs the systemd unit files, reloads systemd and enables them;
 #   6. starts the services again: helper, then web (which applies database
 #      migrations on start-up), then worker.
@@ -49,7 +54,7 @@ SOURCE_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 # Defaults; the command-line options below can change these.
 PYTHON=python3
-WITH_HELPER=false
+WITH_HELPER=true
 START=false
 
 # --- Helpers -----------------------------------------------------------------
@@ -58,9 +63,9 @@ usage() {
     cat <<'EOF'
 Install or upgrade NAS Manager on Ubuntu. Run as root from the source tree:
 
-  sudo deploy/install.sh [--with-helper] [--start] [--python /usr/bin/python3]
+  sudo deploy/install.sh [--without-helper] [--start] [--python /usr/bin/python3]
 
-  --with-helper   also install the root helper service
+  --without-helper  do not install the root helper service
   --start         start every service when done
   --python PATH   Python 3.12+ used for the virtual environment
   -h, --help      show this help
@@ -77,7 +82,8 @@ die() { echo "error: $*" >&2; exit 1; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --with-helper) WITH_HELPER=true ;;
+        --with-helper) WITH_HELPER=true ;; # the default; kept for old scripts
+        --without-helper) WITH_HELPER=false ;;
         --start) START=true ;;
         --python)
             [[ $# -ge 2 ]] || { echo "--python needs a path" >&2; exit 2; }
@@ -98,6 +104,13 @@ done
 
 # The services are managed by systemd.
 command -v systemctl >/dev/null || die "systemd is required"
+
+# An installed helper is always upgraded, so --without-helper cannot leave a
+# stale helper unit running old code.
+if ! $WITH_HELPER && [[ -e $UNIT_DIR/$HELPER_UNIT ]]; then
+    log "the helper is already installed; upgrading it despite --without-helper"
+    WITH_HELPER=true
+fi
 
 # Make sure we are running from a real NAS Manager source tree.
 for path in app migrations alembic.ini requirements.txt deploy/systemd/$WEB_UNIT; do
@@ -164,7 +177,7 @@ chown -R root:root "${CODE[@]}"
 find "${CODE[@]}" -type d -exec chmod 0755 {} +
 find "${CODE[@]}" -type f -exec chmod 0644 {} +
 chmod 0755 "$PREFIX/deploy/install.sh" "$PREFIX/deploy/uninstall.sh" \
-    "$PREFIX/deploy/nas-manager-cli" "$PREFIX/deploy/smoke_test.py"
+    "$PREFIX/deploy/nas-manager-cli" "$PREFIX/deploy/smoke_test.py" "$PREFIX/deploy/env_setup.py"
 
 # Create the virtual environment on the first install only.
 if [[ ! -x $PREFIX/.venv/bin/python ]]; then
@@ -194,16 +207,31 @@ else
     log "installing $ENV_FILE from the template"
     install -o root -g "$SERVICE_USER" -m 0640 \
         "$SOURCE_DIR/deploy/nas-manager.env.example" "$ENV_FILE"
-    if $WITH_HELPER; then
-        # Allow the service account to send requests to the root helper.
-        printf '\n# Added by install.sh: the service account may call the helper.\nNAS_HELPER_ALLOWED_UIDS=%s\n' \
-            "$SERVICE_UID" >>"$ENV_FILE"
-    else
-        # No helper installed, so tell the application not to use one.
-        sed -i 's/^NAS_HELPER_ENABLED=true$/NAS_HELPER_ENABLED=false/' "$ENV_FILE"
-    fi
     NEW_ENV=true # remembered for the "next steps" message
 fi
+
+# Bring the env file up to date, new or kept: append settings this version
+# added, enable (or disable) the helper and allow the service account to call
+# it, and, on a terminal, ask for the host names and HTTPS while
+# NAS_TRUSTED_HOSTS is still the template placeholder.
+log "checking $ENV_FILE"
+ENV_ARGS=(--env-file "$ENV_FILE" --template "$SOURCE_DIR/deploy/nas-manager.env.example"
+    --service-uid "$SERVICE_UID")
+if $WITH_HELPER; then ENV_ARGS+=(--helper); else ENV_ARGS+=(--no-helper); fi
+[[ -t 0 ]] && ENV_ARGS+=(--interactive)
+"$PYTHON" "$SOURCE_DIR/deploy/env_setup.py" "${ENV_ARGS[@]}"
+
+# Refuse to start services on a configuration the application rejects (they
+# would only crash-loop): load it exactly as the installed code will.
+(cd "$PREFIX" && .venv/bin/python -c '
+import sys
+from pydantic import ValidationError
+from app.core.config import Settings
+try:
+    Settings(_env_file=sys.argv[1])
+except ValidationError as exc:
+    sys.exit(f"invalid configuration in {sys.argv[1]}:\n{exc}")
+' "$ENV_FILE") || die "fix $ENV_FILE and run the installer again"
 
 # 5. systemd units -----------------------------------------------------------
 # Web and worker are always installed; the helper only with --with-helper
@@ -250,8 +278,11 @@ cat <<EOF
 NAS Manager is installed in $PREFIX.
 Next steps:
 EOF
-if [[ ${NEW_ENV:-false} == true ]]; then
-    echo "  - Review $ENV_FILE (NAS_TRUSTED_HOSTS, reverse proxy, file roots)."
+if grep -q '^NAS_TRUSTED_HOSTS=.*nas\.example\.org' "$ENV_FILE"; then
+    echo "  - Set NAS_TRUSTED_HOSTS in $ENV_FILE to the names this NAS is reached by"
+    echo "    (it still holds the placeholder nas.example.org), then restart the services."
+elif [[ ${NEW_ENV:-false} == true ]]; then
+    echo "  - Review $ENV_FILE (reverse proxy, file roots)."
 fi
 cat <<EOF
   - Create the first administrator (prompts for the password):

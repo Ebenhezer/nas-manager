@@ -31,11 +31,12 @@ Exercised end to end in Phase 14 with systemd 255 in an Ubuntu 24.04 container (
 sudo apt install python3-venv smartmontools mdadm util-linux nginx
 
 # 2. Install from the source tree (idempotent; also the upgrade command).
-#    --with-helper installs the root helper for disks, RAID and Samba reloads.
-sudo deploy/install.sh --with-helper
+#    The root helper for disks, RAID and Samba reloads is installed too
+#    (--without-helper skips it). On a terminal it asks for the names the NAS
+#    is reached by and whether HTTPS is in front.
+sudo deploy/install.sh
 
-# 3. Review the configuration it created (only created when missing):
-#    NAS_TRUSTED_HOSTS, NAS_FILE_ROOTS, NAS_MEDIA_DIR, ...
+# 3. Review the rest of the configuration: NAS_FILE_ROOTS, NAS_MEDIA_DIR, ...
 sudoedit /etc/nas-manager/nas-manager.env
 
 # 4. Start helper, web (applies migrations in ExecStartPre) and worker.
@@ -50,9 +51,17 @@ sudo python3 /opt/nas-manager/deploy/smoke_test.py
 printf '%s\n' "$ADMIN_PASSWORD" | sudo python3 /opt/nas-manager/deploy/smoke_test.py --login admin
 ```
 
-What `install.sh` does: creates the `nas-manager` system user (no shell, no home), stops running units, copies the code to `/opt/nas-manager` (root-owned, read-only for the service), builds the virtual environment from the pinned `requirements.txt`, creates `/etc/nas-manager` (`0750 root:nas-manager`) and installs `nas-manager.env` (`0640`) **only when it does not exist** (with the helper, it appends `NAS_HELPER_ALLOWED_UIDS=<uid>`; without, it sets `NAS_HELPER_ENABLED=false`), installs and enables the units and starts what was running before (`--start` starts everything). It never creates accounts in the application, formats, mounts or deletes data.
+What `install.sh` does: creates the `nas-manager` system user (no shell, no home), stops running units, copies the code to `/opt/nas-manager` (root-owned, read-only for the service), builds the virtual environment from the pinned `requirements.txt`, creates `/etc/nas-manager` (`0750 root:nas-manager`) and installs `nas-manager.env` (`0640`) from the template **only when it does not exist**, then brings it up to date with `deploy/env_setup.py` on every run (see below), validates it with the installed code (it stops before starting anything when the application would reject it), installs and enables the units and starts what was running before (`--start` starts everything). It never creates accounts in the application, formats, mounts or deletes data.
 
 The units set `NAS_DATA_DIR=/var/lib/nas-manager` and `NAS_LOG_DIR=/var/log/nas-manager`; systemd creates both with the service user as owner. Use `deploy/nas-manager.env.example` (not the development `.env.example`) for the service: systemd lets `EnvironmentFile=` override `Environment=`, so the per-unit settings (`NAS_DATA_DIR`, `NAS_LOG_DIR`, `NAS_ENVIRONMENT`, `NAS_LOG_FILE_NAME`, `NAS_LOG_TO_FILE`, `NAS_SYSLOG_IDENTIFIER`) must stay out of the env file (a test enforces this).
+
+On every install and upgrade, `deploy/env_setup.py` changes the env file only where the application would otherwise not work, and prints each change; values you set are never overwritten:
+
+- settings active in `deploy/nas-manager.env.example` but missing from your file (new in this version) are appended under an `# Added by install.sh (<date>)` comment;
+- with the helper, `NAS_HELPER_ENABLED=true` and the service account's UID is added to `NAS_HELPER_ALLOWED_UIDS`; with `--without-helper` (and no helper installed), `NAS_HELPER_ENABLED=false`;
+- while `NAS_TRUSTED_HOSTS` still holds the placeholder `nas.example.org`, an installer run on a terminal asks for the names and addresses the NAS is reached by (default: host name, FQDN, LAN addresses, `localhost`, `127.0.0.1`) and whether clients use HTTPS; answering no sets `NAS_SESSION_COOKIE_SECURE=false` and `NAS_HSTS_MAX_AGE_SECONDS=0`, since secure cookies are never sent over plain HTTP. Without a terminal it only warns.
+
+An already installed helper is always upgraded, even with `--without-helper`. The installer still accepts `--with-helper` (the default) for older scripts.
 
 Always run CLI commands (`bootstrap-admin`, `restore-system`, `backup-recover`) through `deploy/nas-manager-cli`: it runs `python -m app.cli` as the service account with the units' environment through `systemd-run`. A plain `sudo -u nas-manager … python -m app.cli` (the instruction before Phase 14) does not load the env file or the unit's `NAS_DATA_DIR` and acts on a `data/` directory relative to the current directory.
 
@@ -114,16 +123,17 @@ sudo /src/nas-manager/deploy/uninstall.sh --purge --yes   # also /var/lib, /var/
 
 The web process stays unprivileged. A second root service performs discovery and the privileged actions:
 
-`install.sh --with-helper` installs and enables `nas-manager-helper.service` and authorises the service account (`NAS_HELPER_ALLOWED_UIDS`). To add the helper to an existing installation, re-run the installer with `--with-helper` and set in `/etc/nas-manager/nas-manager.env`:
+`install.sh` installs and enables `nas-manager-helper.service` (unless `--without-helper`), sets `NAS_HELPER_ENABLED=true` and authorises the service account in `NAS_HELPER_ALLOWED_UIDS`, also in an existing env file. To add the helper to an installation made with `--without-helper`, re-run the installer without that flag and restart:
 
 ```bash
-NAS_HELPER_ENABLED=true
-NAS_HELPER_ALLOWED_UIDS=<output of: id -u nas-manager>
+sudo deploy/install.sh
 # NAS_HELPER_SOCKET=/run/nas-manager/helper.sock   (default)
 # NAS_HELPER_SOCKET_GROUP=nas-manager              (default)
 sudo systemctl restart nas-manager-helper nas-manager nas-manager-worker
 journalctl -u nas-manager-helper -n 50 --no-pager
 ```
+
+`refusing connection from uid N (not allowlisted)` in that log means `NAS_HELPER_ALLOWED_UIDS` lacks the service account's UID: re-run the installer.
 
 The helper runs in the host's mount namespace on purpose (no `PrivateTmp`/`ProtectHome`/`ProtectSystem`), so a disk it mounts is visible to Samba, the web unit and the shell. Its run directory `/run/nas-manager` is `0711` (traverse only) and the socket `0660 root:nas-manager`.
 
@@ -260,8 +270,8 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/login   # 200
 ## Upgrading
 
 1. Back up `/var/lib/nas-manager` (see `BACKUP_AND_RESTORE.md`) and keep the previous source tree.
-2. From the new source tree: `sudo deploy/install.sh --with-helper` (omit `--with-helper` if you do not use it). It stops worker, web and helper, replaces the code, updates the virtual environment, keeps `/etc/nas-manager/nas-manager.env` and starts the units that were running, helper first; the web unit applies migrations before it starts.
-3. Run `deploy/smoke_test.py` and compare `deploy/nas-manager.env.example` with your env file for new settings (every setting is listed there).
+2. From the new source tree: `sudo deploy/install.sh` (add `--without-helper` if you never installed the helper). It stops worker, web and helper, replaces the code, updates the virtual environment, keeps `/etc/nas-manager/nas-manager.env` (appending settings new in this version and fixing the helper settings, see above) and starts the units that were running, helper first; the web unit applies migrations before it starts.
+3. Run `deploy/smoke_test.py`. Settings the installer appended are at the end of the env file; commented-out ones (optional) are listed in `deploy/nas-manager.env.example`.
 4. **Rollback:** stop the units, restore `/var/lib/nas-manager` from the backup (migrations are not downgraded automatically), run `install.sh` from the previous source tree.
 5. After upgrading to Phase 9 with ffmpeg installed, videos indexed earlier are probed on their library's next scan (or press **Rescan**).
 6. Phase 13 introduces a 90-day audit retention (see above): set `NAS_AUDIT_RETENTION_DAYS=0` before restarting the worker to keep the full history.

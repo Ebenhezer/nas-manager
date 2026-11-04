@@ -15,6 +15,6 @@ cp .env.example .env
 .venv/bin/python -m pytest
 ```
 
-Production install on Ubuntu: `sudo deploy/install.sh --with-helper` (see `docs/INSTALLATION.md`).
+Production install on Ubuntu: `sudo deploy/install.sh` (see `docs/INSTALLATION.md`).
 
 Documentation: `docs/ARCHITECTURE.md`, `docs/INSTALLATION.md`, `docs/SECURITY.md`, `docs/BACKUP_AND_RESTORE.md`, `docs/API.md`, `docs/IMPLEMENTATION_PLAN.md`.
