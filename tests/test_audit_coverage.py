@@ -42,6 +42,7 @@ ROUTE_EVENTS: dict[str, tuple[str, ...]] = {
     "PATCH /api/v1/files/rename": (A.FILE_RENAMED,),
     "DELETE /api/v1/files": (A.FILE_DELETED,),
     "POST /api/v1/files/transfers": (A.FILE_TRANSFER_STARTED,),
+    "POST /api/v1/disks/removable/rescan": (A.DISK_REMOVABLE_RESCAN,),
     "POST /api/v1/files/transfers/{transfer_id}/cancel": (A.FILE_TRANSFER_CANCEL_REQUESTED,),
     "POST /api/v1/samba/shares": (A.SAMBA_SHARE_CREATED,),
     "PATCH /api/v1/samba/shares/{share_id}": (A.SAMBA_SHARE_UPDATED,),

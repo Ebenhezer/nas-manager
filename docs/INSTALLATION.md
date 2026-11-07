@@ -148,12 +148,28 @@ Then open **Disks** in the UI: physical disks, mounted volumes and RAID arrays r
 
 With the helper installed, plugging in a USB stick or disk is enough. Within a few seconds (`NAS_REMOVABLE_POLL_SECONDS`, default 3) the helper mounts it under `/media/nas-manager/<label>`, and it appears under **USB drives** on the Files page and on the Disks page. When it is pulled out the helper unmounts it. Files copied from the Files page are flushed to the stick when the transfer shows "Done", so it can be pulled out right away. A stick pulled out during a copy fails that copy.
 
-- Supported: FAT32 (`vfat`), exFAT, NTFS (kernel `ntfs3` when available, else `ntfs-3g`), ext2/3/4, btrfs, xfs, HFS+. The Windows/Mac formats are fully writable. A Linux-formatted stick is writable only where its own permissions allow the `nas-manager` user, and is otherwise shown as read-only.
+- Supported formats and the drivers they need:
+
+  | Format | Typical for | Driver |
+  |--------|-------------|--------|
+  | FAT32 (`vfat`) | small sticks, cameras | built into the kernel |
+  | exFAT | most sticks over 32 GB, SD cards | kernel 5.7+ built in (`exfatprogs` for tools); older kernels: `sudo apt install exfat-fuse` |
+  | NTFS | Windows external disks | kernel `ntfs3` (5.15+) or `sudo apt install ntfs-3g` |
+  | ext2/3/4, btrfs, xfs | Linux disks | built in |
+  | HFS+ | older Mac disks | kernel module `hfsplus` (writes only if not journaled) |
+
+  The Windows/Mac formats are fully writable. A Linux-formatted stick is writable only where its own permissions allow the `nas-manager` user, and is otherwise shown as read-only.
+- The file system is read with `lsblk`. When that has no answer (no udev database: containers, WSL, minimal installs, or a stick udev is still probing), the helper reads it straight from the device with `blkid -p`.
 - Who may use them: the `removable:read` / `removable:write` permissions (admin and operator by default; add them to other roles on the Roles page).
 - `install.sh` creates `/media/nas-manager` (`root:nas-manager 0750`), and both units list it in `ReadWritePaths`. If you change `NAS_REMOVABLE_MOUNT_DIR`, change `ReadWritePaths=-/media/nas-manager` in `nas-manager.service` and `nas-manager-worker.service` to match.
 - `NAS_REMOVABLE_AUTOMOUNT=false` (in the env file, then restart `nas-manager-helper`) turns automatic mounting off. Drives can then still be mounted by hand on the Disks page.
 - Internal disks are never mounted automatically, and neither are disks listed in `/etc/fstab`.
-- Check it: `journalctl -u nas-manager-helper | grep -i removable`, and the audit log (`disk.removable_mounted` / `disk.removable_unmounted`).
+- **If a stick does not mount**, the Disks page's USB card shows each partition with a state (ready, could not mount, not supported, left alone) and the reason. An admin can press **Try again** after fixing it, without waiting for the one-minute retry. Common reasons and fixes:
+  - *"no exFAT driver"* (or NTFS): install the driver from the table above, then press Try again.
+  - *"file system not recognised"*: the stick is empty or unformatted, or uses a format not listed above.
+  - *"listed in /etc/fstab"*: the system mounts it itself; remove the fstab line to let the NAS manage it.
+  - *"helper too old"* badge: after upgrading, re-run `sudo deploy/install.sh` and `sudo systemctl restart nas-manager-helper nas-manager nas-manager-worker`.
+- Check it by hand: `lsblk -f /dev/sdX`, `sudo blkid -p /dev/sdX1`, `grep -E 'exfat|ntfs' /proc/filesystems`, `journalctl -u nas-manager-helper | grep -i removable`, and the audit log (`disk.removable_mounted` / `disk.removable_unmounted` / `disk.removable_mount_failed`).
 
 ### Remote and cloud sync (Phase 7, sync worker)
 

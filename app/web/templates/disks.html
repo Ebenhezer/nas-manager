@@ -10,7 +10,10 @@
 <div class="card mb-4">
   <div class="card-header d-flex align-items-center justify-content-between">
     <span>USB drives</span>
-    <span class="small" id="usb-automount"></span>
+    <span class="d-flex flex-wrap gap-2 align-items-center">
+      <span class="small" id="usb-automount"></span>
+      {% if can('disks:write') %}<button type="button" class="btn btn-sm btn-outline-secondary d-none" id="usb-retry">Try again</button>{% endif %}
+    </span>
   </div>
   <div class="card-body">
     <p class="small text-body-secondary mb-3" id="usb-explainer">

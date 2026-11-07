@@ -151,3 +151,23 @@ class OperationResult(BaseModel):
     ok: bool = True
     message: str
     details: dict[str, object] | None = None
+
+
+class RemovableDevice(BaseModel):
+    """A partition of a USB / removable disk as the helper sees it (Phase 16)."""
+
+    name: str
+    device: str
+    label: str | None = None
+    uuid: str | None = None
+    fstype: str | None = None
+    size_bytes: int = 0
+    # pending | mounted | failed | unsupported | ignored
+    state: str
+    reason: str | None = None
+    mountpoint: str | None = None
+
+
+class RemovableDevices(BaseModel):
+    automount: bool
+    devices: list[RemovableDevice]

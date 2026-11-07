@@ -34,6 +34,7 @@ from app.schemas.disks import (
     RaidArray,
     RaidList,
     RaidMember,
+    RemovableDevices,
     ScrubPreview,
     SmartAttribute,
     SmartData,
@@ -428,6 +429,29 @@ def helper_status(settings: Settings) -> HelperStatus:
     status.removable_automount = bool(removable.get("automount"))
     status.removable_mount_dir = removable.get("mount_dir")
     return status
+
+
+def removable_devices(settings: Settings) -> RemovableDevices:
+    """USB partitions and why each is (not) mounted, from the helper's last pass."""
+    response = call_helper(settings, "removable.devices", {})
+    return RemovableDevices.model_validate(response)
+
+
+def removable_rescan(
+    db: Any, settings: Settings, *, actor: User, context: dict[str, Any] | None = None
+) -> RemovableDevices:
+    """Look for USB drives now and retry ones that failed to mount."""
+    response = call_helper(settings, "removable.reconcile", {"retry": True})
+    audit.record_audit_event(
+        db,
+        event=audit.DISK_REMOVABLE_RESCAN,
+        category=audit.CATEGORY_DISK,
+        actor=actor,
+        target_type="removable_drives",
+        details={"events": len(response.get("events") or [])},
+        **_audit_ctx(context),
+    )
+    return RemovableDevices(automount=True, devices=response.get("devices") or [])
 
 
 def list_disks(settings: Settings) -> list[PhysicalDisk]:

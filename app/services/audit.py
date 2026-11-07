@@ -178,6 +178,7 @@ MEDIA_TRANSCODE_FAILED = "media.transcode_failed"
 DISK_REMOVABLE_MOUNTED = "disk.removable_mounted"
 DISK_REMOVABLE_UNMOUNTED = "disk.removable_unmounted"
 DISK_REMOVABLE_MOUNT_FAILED = "disk.removable_mount_failed"
+DISK_REMOVABLE_RESCAN = "disk.removable_rescan"
 # Explorer-style gallery (Phase 15)
 MEDIA_ITEMS_DOWNLOADED = "media.items_downloaded"
 MEDIA_ITEMS_MOVED = "media.items_moved"

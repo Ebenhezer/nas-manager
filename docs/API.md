@@ -264,6 +264,8 @@ Discovery is **read-only** and goes through the privileged helper; every respons
 - `GET /disks/{name}` → the block device and its children (partition/md/…).
 - `GET /disks/{name}/smart` → SMART health summary: `health` (`passed`/`failed`), model/serial/firmware, temperature, capacity and up to 12 attributes. Devices without SMART return `available: false` with the smartctl exit code, not an error.
 - `GET /disks/status` → `{"enabled", "available", "socket", "error", "removable_automount", "removable_mount_dir"}` (helper reachability probe; the UI shows an offline badge when it fails; the last two come from the helper itself, Phase 16).
+- `GET /disks/removable` (`disks:read`) → `{"automount", "devices": [{"name", "device", "label", "uuid", "fstype", "size_bytes", "state": "pending"|"mounted"|"failed"|"unsupported"|"ignored", "reason", "mountpoint"}]}`: every partition of a USB/removable disk from the helper's last pass, and why it is or is not mounted (Phase 16).
+- `POST /disks/removable/rescan` (`disks:write`) → the same shape after an immediate pass that also retries earlier mount failures. Audited as `disk.removable_rescan`.
 - `GET /storage/volumes` → mounted volumes (`target`, `source`, `fs_type`, `options`, `used_bytes`, `avail_bytes`, `size_bytes`).
 - `GET /storage/raid` → `{"arrays": [{"name": "md0", "path": "/dev/md0", "level": "raid1", "state": "active", "size_bytes": ..., "active_disks": 2, "total_disks": 2, "sync_action": null, "degraded": false, "members": [{"device": "sdb1", "state": "active sync"}]}], "detail_scan": "..."}`.
 

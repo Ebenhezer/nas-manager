@@ -430,12 +430,19 @@ def _op_removable_status(params: dict[str, Any], settings: Settings) -> dict[str
 
 
 def _op_removable_reconcile(params: dict[str, Any], settings: Settings) -> dict[str, Any]:
-    del params
     from app.helper import removable
 
     if not settings.removable_automount:
         raise OperationFailedError("automatic mounting of removable drives is turned off")
-    return {"events": removable.reconcile(settings)}
+    events = removable.reconcile(settings, retry=params.get("retry") is True)
+    return {"events": events, "devices": removable.device_statuses()}
+
+
+def _op_removable_devices(params: dict[str, Any], settings: Settings) -> dict[str, Any]:
+    del params
+    from app.helper import removable
+
+    return {"automount": settings.removable_automount, "devices": removable.device_statuses()}
 
 
 def _op_removable_events(params: dict[str, Any], settings: Settings) -> dict[str, Any]:
@@ -465,6 +472,7 @@ OPERATIONS: dict[str, OperationHandler] = {
     "samba.apply": _op_samba_apply,
     "removable.status": _op_removable_status,
     "removable.reconcile": _op_removable_reconcile,
+    "removable.devices": _op_removable_devices,
     "removable.events": _op_removable_events,
     "removable.flush": _op_removable_flush,
 }

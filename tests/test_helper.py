@@ -79,6 +79,7 @@ def test_operations_expose_the_fixed_allowlist() -> None:
         "ping",
         "raid.list",
         "raid.scrub",
+        "removable.devices",
         "removable.events",
         "removable.flush",
         "removable.reconcile",
@@ -467,6 +468,9 @@ def test_helper_over_socket_end_to_end(tmp_path: Path) -> None:
             "NAS_LOG_TO_CONSOLE": "false",
             "NAS_LOG_TO_FILE": "false",
             "NAS_SAMBA_CONFIG_PATH": str(tmp_path / "smb.conf"),
+            # Never auto-mount (or even scan) the test machine's real disks.
+            "NAS_REMOVABLE_AUTOMOUNT": "false",
+            "NAS_REMOVABLE_MOUNT_DIR": str(tmp_path / "media"),
         }
     )
     proc = subprocess.Popen(

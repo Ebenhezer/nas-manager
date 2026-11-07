@@ -319,3 +319,102 @@ def test_mount_table_parsing_unescapes_paths() -> None:
     assert entries[0].read_only
     assert mounts_under(Path("/media/nas-manager"), entries) == entries
     assert mounts_under(Path("/media"), entries) == []
+
+
+# ---------------------------------------------------------------------------
+# No udev: blkid fills in the file system; reasons for every partition
+# ---------------------------------------------------------------------------
+
+
+def test_blkid_fills_in_the_file_system_when_lsblk_has_none() -> None:
+    probed: list[str] = []
+
+    def probe(device: str) -> dict[str, str]:
+        probed.append(device)
+        return {"sda1": {"TYPE": "exfat", "LABEL": "UDISK", "UUID": "1234-ABCD"}}.get(
+            device[5:], {}
+        )
+
+    listing = lsblk(
+        disk(
+            "sda",
+            children=[
+                part("sda1", None, label=None, uuid=None),
+                part("sda2", None, label=None, uuid=None),
+            ],
+        ),
+        disk("sdb", tran="sata", children=[part("sdb1", None, label=None, uuid=None)]),
+    )
+    statuses = {s.name: s for s in removable.inspect(listing, fstab=set(), probe=probe)}
+    assert probed == ["/dev/sda1", "/dev/sda2"]  # never the internal disk
+    assert (statuses["sda1"].fstype, statuses["sda1"].label, statuses["sda1"].state) == (
+        "exfat",
+        "UDISK",
+        "pending",
+    )
+    assert statuses["sda2"].state == "unsupported"
+    assert "not recognised" in statuses["sda2"].reason
+    assert [c.name for c in removable.candidates(listing, fstab=set(), probe=probe)] == ["sda1"]
+
+
+def test_every_removable_partition_gets_a_state_and_reason() -> None:
+    listing = lsblk(
+        disk(
+            "sdb",
+            children=[
+                part("sdb1", "exfat", label="OK"),
+                part("sdb2", "linux_raid_member"),
+                part("sdb3", "zfs_member"),
+                part("sdb4", "vfat", uuid="F1"),
+                part("sdb5", "ext4", mountpoint="/mnt/elsewhere"),
+                {**part("sdb6", None), "size": 1024},  # extended-partition placeholder
+            ],
+        )
+    )
+    statuses = {
+        s.name: s for s in removable.inspect(listing, fstab={"UUID=F1"}, probe=lambda d: {})
+    }
+    assert statuses["sdb1"].state == "pending"
+    assert (statuses["sdb2"].state, statuses["sdb2"].reason) == (
+        "ignored",
+        "part of a RAID array (managed on the Disks page)",
+    )
+    assert (statuses["sdb3"].state, statuses["sdb3"].reason) == (
+        "unsupported",
+        "unsupported file system: zfs_member",
+    )
+    assert statuses["sdb4"].state == "ignored" and "fstab" in statuses["sdb4"].reason
+    assert (statuses["sdb5"].state, statuses["sdb5"].mountpoint) == ("mounted", "/mnt/elsewhere")
+    assert "sdb6" not in statuses
+
+
+def test_mount_errors_are_explained() -> None:
+    assert "install exfatprogs" in removable.explain_mount_error(
+        "exfat", "mount: /x: unknown filesystem type 'exfat'."
+    )
+    assert "ntfs-3g" in removable.explain_mount_error("ntfs3", "unknown filesystem type 'ntfs3'")
+    assert "may need repair" in removable.explain_mount_error(
+        "vfat", "wrong fs type, bad option, bad superblock on /dev/sdb1"
+    )
+    assert removable.explain_mount_error("vfat", "") == "mount failed"
+
+
+def test_failed_mount_reason_is_kept_and_retry_bypasses_the_backoff(
+    settings: Settings, system: FakeSystem, tmp_path: Path
+) -> None:
+    system.fail_mount = True
+    system.listing = lsblk(disk("sda", children=[part("sda1", "exfat", label="UDISK")]))
+    removable.reconcile(settings, mounts_path=system.mounts, fstab=tmp_path / "none")
+    devices = operations.dispatch("removable.devices", {}, settings)["devices"]
+    assert [(d["name"], d["state"]) for d in devices] == [("sda1", "failed")]
+    assert "wrong fs type" in devices[0]["reason"]
+    # Within the back-off the reason stays visible and nothing is retried.
+    calls_before = len([c for c in system.calls if c[0] == "mount"])
+    removable.reconcile(settings, mounts_path=system.mounts, fstab=tmp_path / "none")
+    assert len([c for c in system.calls if c[0] == "mount"]) == calls_before
+    assert removable.device_statuses()[0]["state"] == "failed"
+    system.fail_mount = False
+    result = operations.dispatch("removable.reconcile", {"retry": True}, settings)
+    assert [e["action"] for e in result["events"]] == ["mounted"]
+    assert result["devices"][0]["state"] == "mounted"
+    assert result["devices"][0]["mountpoint"] == str(settings.removable_mount_dir / "UDISK")

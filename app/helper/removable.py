@@ -25,6 +25,7 @@ import re
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -36,6 +37,7 @@ from app.helper.operations import (
     LSBLK_COLUMNS,
     OperationFailedError,
     ValidationError,
+    _run,
     _run_checked,
 )
 from app.helper.protocol import validate_device_name
@@ -56,7 +58,9 @@ _RETRY_AFTER_SECONDS = 60.0
 _NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 _events: deque[dict[str, Any]] = deque(maxlen=200)
-_failed: dict[str, float] = {}
+_failed: dict[str, tuple[float, str]] = {}
+# The latest pass's view of every removable partition (removable.devices).
+_status: dict[str, DeviceStatus] = {}
 _lock = threading.Lock()
 
 
@@ -115,34 +119,159 @@ def _in_fstab(node: dict[str, Any], specs: set[str]) -> bool:
     return bool(keys & specs)
 
 
-def candidates(lsblk_json: str, *, fstab: set[str]) -> list[Candidate]:
-    """Unmounted partitions of removable disks that may be auto-mounted."""
+@dataclass
+class DeviceStatus:
+    """What the helper made of one removable partition (Disks page)."""
+
+    name: str
+    device: str
+    label: str | None
+    uuid: str | None
+    fstype: str | None
+    size_bytes: int
+    # pending (about to be mounted) | mounted | failed | unsupported | ignored
+    state: str
+    reason: str | None = None
+    mountpoint: str | None = None
+
+    def candidate(self) -> Candidate:
+        return Candidate(
+            name=self.name,
+            device=self.device,
+            fstype=self.fstype or "",
+            label=self.label,
+            uuid=self.uuid,
+            size_bytes=self.size_bytes,
+        )
+
+
+_IGNORED_FSTYPES = {
+    "linux_raid_member": "part of a RAID array (managed on the Disks page)",
+    "crypto_luks": "encrypted (LUKS) volume",
+    "swap": "swap space",
+    "lvm2_member": "LVM volume",
+}
+# Partition-table placeholders (e.g. an extended partition) are not volumes.
+_MIN_VOLUME_BYTES = 1024 * 1024
+
+
+def probe_filesystem(device: str) -> dict[str, str]:
+    """``blkid -p``: read the file system straight from the device.
+
+    ``lsblk`` takes FSTYPE/LABEL/UUID from the udev database, which is empty
+    in containers, under WSL, on minimal installs and while udev is still
+    probing a freshly plugged stick; this low-level probe needs no udev.
+    """
+    result = _run(["blkid", "-p", "-o", "export", device])
+    if result.returncode != 0:
+        return {}
+    found: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            found[key.strip()] = value.strip()
+    return found
+
+
+def inspect(
+    lsblk_json: str,
+    *,
+    fstab: set[str],
+    probe: Callable[[str], dict[str, str]] | None = None,
+) -> list[DeviceStatus]:
+    """Every partition of every removable disk, with what to do about it."""
+    probe = probe or probe_filesystem
     data = json.loads(lsblk_json)
-    found: list[Candidate] = []
+    found: list[DeviceStatus] = []
     for disk in data.get("blockdevices") or []:
         if disk.get("type") != "disk" or not is_removable_disk(disk):
             continue
         parts = [child for child in disk.get("children") or [] if child.get("type") == "part"]
         for node in parts or [disk]:
-            fstype = (node.get("fstype") or "").lower()
-            if fstype not in SUPPORTED_FSTYPES or _mounted(node) or _in_fstab(node, fstab):
+            size = int(node.get("size") or 0)
+            if parts and size < _MIN_VOLUME_BYTES:
                 continue
             try:
                 # Only ever hand mount a validated /dev/<name>, never a path from lsblk.
                 device = validate_device_name(str(node.get("name") or ""))
             except ValueError:
                 continue
-            found.append(
-                Candidate(
-                    name=str(node.get("name")),
-                    device=device,
-                    fstype=fstype,
-                    label=node.get("label") or None,
-                    uuid=node.get("uuid") or None,
-                    size_bytes=int(node.get("size") or 0),
-                )
+            fstype = (node.get("fstype") or "").lower()
+            label = node.get("label") or None
+            uuid = node.get("uuid") or None
+            if not fstype:
+                details = probe(device)
+                fstype = details.get("TYPE", "").lower()
+                label = label or details.get("LABEL") or None
+                uuid = uuid or details.get("UUID") or None
+            status = DeviceStatus(
+                name=str(node.get("name")),
+                device=device,
+                label=label,
+                uuid=uuid,
+                fstype=fstype or None,
+                size_bytes=size,
+                state="pending",
             )
+            points = [p for p in [node.get("mountpoint"), *(node.get("mountpoints") or [])] if p]
+            probed = {**node, "label": label, "uuid": uuid}
+            if points:
+                status.state, status.mountpoint = "mounted", points[0]
+            elif not fstype:
+                status.state = "unsupported"
+                status.reason = "file system not recognised (empty or unformatted?)"
+            elif fstype in _IGNORED_FSTYPES:
+                status.state, status.reason = "ignored", _IGNORED_FSTYPES[fstype]
+            elif fstype not in SUPPORTED_FSTYPES:
+                status.state, status.reason = "unsupported", f"unsupported file system: {fstype}"
+            elif _in_fstab(probed, fstab):
+                status.state = "ignored"
+                status.reason = "listed in /etc/fstab (the system mounts it, not the NAS)"
+            found.append(status)
     return found
+
+
+def candidates(
+    lsblk_json: str,
+    *,
+    fstab: set[str],
+    probe: Callable[[str], dict[str, str]] | None = None,
+) -> list[Candidate]:
+    """Unmounted partitions of removable disks that may be auto-mounted."""
+    return [
+        status.candidate()
+        for status in inspect(lsblk_json, fstab=fstab, probe=probe)
+        if status.state == "pending"
+    ]
+
+
+_DRIVER_HINTS = {
+    "exfat": (
+        "this system has no exFAT driver: install exfatprogs (Linux 5.7 or newer) or exfat-fuse"
+    ),
+    "ntfs": "this system has no NTFS driver: install ntfs-3g (or use a kernel with ntfs3)",
+    "ntfs3": "this system has no NTFS driver: install ntfs-3g (or use a kernel with ntfs3)",
+    "hfsplus": "this system has no HFS+ driver (kernel module hfsplus)",
+    "btrfs": "this system has no btrfs driver (kernel module btrfs)",
+    "xfs": "this system has no XFS driver (kernel module xfs)",
+}
+
+
+def explain_mount_error(fstype: str, output: str) -> str:
+    """A plain-language reason for a failed mount, with the raw message."""
+    text = output.strip()
+    lowered = text.lower()
+    if "unknown filesystem type" in lowered or "no such device" in lowered:
+        hint = _DRIVER_HINTS.get(fstype, f"this system has no driver for {fstype}")
+        return f"{hint} ({text})" if text else hint
+    if "wrong fs type" in lowered or "bad superblock" in lowered:
+        return (
+            "the drive could not be read; it may need repair "
+            f"(check it on a Windows or Mac computer) ({text})"
+        )
+    if "read-only" in lowered or "write-protected" in lowered:
+        return f"the drive is write-protected ({text})"
+    return text or "mount failed"
 
 
 # ---------------------------------------------------------------------------
@@ -233,10 +362,16 @@ def drain_events() -> list[dict[str, Any]]:
 
 
 def reset_state() -> None:
-    """Forget events and failed devices (tests)."""
+    """Forget events, failed devices and statuses (tests)."""
     with _lock:
         _events.clear()
         _failed.clear()
+        _status.clear()
+
+
+def device_statuses() -> list[dict[str, Any]]:
+    with _lock:
+        return [asdict(status) for status in sorted(_status.values(), key=lambda s: s.name)]
 
 
 # ---------------------------------------------------------------------------
@@ -244,11 +379,13 @@ def reset_state() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _mount_one(base: Path, candidate: Candidate, gid: int, sink: list[dict[str, Any]]) -> None:
+def _mount_one(base: Path, status: DeviceStatus, gid: int, sink: list[dict[str, Any]]) -> None:
+    candidate = status.candidate()
     key = candidate.uuid or candidate.device
     with _lock:
-        failed_at = _failed.get(key)
-    if failed_at is not None and time.monotonic() - failed_at < _RETRY_AFTER_SECONDS:
+        failed = _failed.get(key)
+    if failed is not None and time.monotonic() - failed[0] < _RETRY_AFTER_SECONDS:
+        status.state, status.reason = "failed", failed[1]
         return
     target = mount_target(base, candidate)
     fstype, options = mount_arguments(candidate.fstype, gid)
@@ -260,19 +397,16 @@ def _mount_one(base: Path, candidate: Candidate, gid: int, sink: list[dict[str, 
         if created:
             with contextlib.suppress(OSError):
                 target.rmdir()
+        reason = explain_mount_error(fstype, str((exc.details or {}).get("output", "")))
         with _lock:
-            _failed[key] = time.monotonic()
-        _record(
-            sink,
-            "failed",
-            **asdict(candidate),
-            mountpoint=str(target),
-            error=f"{exc.message}: {(exc.details or {}).get('output', '')}".strip(": "),
-        )
-        logger.warning("could not mount %s: %s", candidate.device, exc.message)
+            _failed[key] = (time.monotonic(), reason)
+        status.state, status.reason = "failed", reason
+        _record(sink, "failed", **asdict(candidate), mountpoint=str(target), error=reason)
+        logger.warning("could not mount %s: %s", candidate.device, reason)
         return
     with _lock:
         _failed.pop(key, None)
+    status.state, status.reason, status.mountpoint = "mounted", None, str(target)
     _record(sink, "mounted", **asdict(candidate), mountpoint=str(target), options=options)
     logger.info("mounted removable drive %s at %s", candidate.device, target)
 
@@ -313,18 +447,34 @@ def _remove_empty_folders(base: Path, entries: list[MountEntry]) -> None:
 
 
 def reconcile(
-    settings: Settings, *, mounts_path: Path | None = None, fstab: Path | None = None
+    settings: Settings,
+    *,
+    mounts_path: Path | None = None,
+    fstab: Path | None = None,
+    retry: bool = False,
 ) -> list[dict[str, Any]]:
-    """Mount new removable drives and clean up removed ones; returns new events."""
+    """Mount new removable drives and clean up removed ones; returns new events.
+
+    ``retry`` forgets earlier mount failures, so they are tried again now
+    (the Disks page's "Try again") instead of after the back-off.
+    """
     mounts_path = mounts_path or PROC_MOUNTS
     fstab = fstab or FSTAB
+    if retry:
+        with _lock:
+            _failed.clear()
     sink: list[dict[str, Any]] = []
     base = ensure_base(settings)
     _unmount_stale(base, read_mounts(mounts_path), sink)
     gid = service_gid(settings)
     stdout = _run_checked(["lsblk", "-J", "-b", "-o", LSBLK_COLUMNS])
-    for candidate in candidates(stdout, fstab=fstab_specs(fstab)):
-        _mount_one(base, candidate, gid, sink)
+    statuses = inspect(stdout, fstab=fstab_specs(fstab))
+    for status in statuses:
+        if status.state == "pending":
+            _mount_one(base, status, gid, sink)
+    with _lock:
+        _status.clear()
+        _status.update({status.device: status for status in statuses})
     _remove_empty_folders(base, read_mounts(mounts_path))
     return sink
 

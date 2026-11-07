@@ -320,11 +320,15 @@ function renderHelperBadge(status) {
   }
 }
 
-function isUsb(disk) {
-  return disk.transport === "usb";
-}
+const USB_STATES = {
+  mounted: ["ready", "success"],
+  pending: ["mounting…", "info"],
+  failed: ["could not mount", "danger"],
+  unsupported: ["not supported", "warning"],
+  ignored: ["left alone", "secondary"],
+};
 
-function renderUsb(status, disks) {
+function renderUsb(status, removable) {
   const automount = document.getElementById("usb-automount");
   automount.replaceChildren();
   if (!status.available) {
@@ -333,38 +337,71 @@ function renderUsb(status, disks) {
     automount.append(badge("automatic mounting is off", "secondary"));
   } else if (status.removable_automount) {
     automount.append(badge("automatic", "success"), " ", document.createTextNode(`mounted under ${status.removable_mount_dir}`));
+  } else {
+    automount.append(badge("helper too old: re-run the installer and restart nas-manager-helper", "warning"));
   }
   const list = document.getElementById("usb-list");
   list.replaceChildren();
-  const usb = disks.filter(isUsb);
-  if (!usb.length) {
+  const devices = removable ? removable.devices : [];
+  if (!devices.length) {
     const item = document.createElement("li");
     item.className = "text-body-secondary small";
-    item.textContent = "No USB drive is plugged in.";
+    item.textContent = removable ? "No USB drive is plugged in." : "USB drive details are not available.";
     list.append(item);
-    return;
   }
-  for (const disk of usb) {
+  for (const device of devices) {
     const item = document.createElement("li");
-    item.className = "d-flex flex-wrap gap-2 align-items-center mb-1";
+    item.className = "mb-2";
+    const head = document.createElement("div");
+    head.className = "d-flex flex-wrap gap-2 align-items-center";
     const name = document.createElement("strong");
-    name.textContent = `${disk.model || disk.name}`;
-    const mounted = disk.mountpoints.filter(Boolean);
-    item.append(
+    name.textContent = device.label || device.name;
+    const [label, kind] = USB_STATES[device.state] || [device.state, "secondary"];
+    head.append(
       name,
-      document.createTextNode(` ${formatBytes(disk.size_bytes)} · /dev/${disk.name} `),
-      mounted.length ? badge("ready", "success") : badge("not mounted", "warning"),
-      document.createTextNode(mounted.length ? ` ${mounted.join(", ")}` : " (unsupported file system, or still being checked)"),
+      document.createTextNode(`${formatBytes(device.size_bytes)} · ${device.fstype || "unknown file system"} · ${device.device}`),
+      badge(label, kind),
     );
+    item.append(head);
+    const detail = document.createElement("div");
+    detail.className = "small text-body-secondary text-break";
+    if (device.state === "mounted" && device.mountpoint) detail.textContent = `Open it on the Files page (${device.mountpoint}).`;
+    else if (device.reason) detail.textContent = device.reason;
+    if (detail.textContent) item.append(detail);
     list.append(item);
+  }
+  const retry = document.getElementById("usb-retry");
+  if (retry) retry.classList.toggle("d-none", !(status.available && status.removable_automount));
+}
+
+async function retryUsb() {
+  const button = document.getElementById("usb-retry");
+  button.disabled = true;
+  try {
+    await apiFetch("/api/v1/disks/removable/rescan", { method: "POST" });
+    await refresh();
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    button.disabled = false;
   }
 }
 
 async function refresh() {
   hideError();
   try {
-    // The status never fails, so the USB card can say "helper offline".
-    renderUsb(await apiFetch("/api/v1/disks/status"), []);
+    // The status never fails, so the USB card can say "helper offline" even
+    // when everything else below does.
+    const status = await apiFetch("/api/v1/disks/status");
+    let removable = null;
+    if (status.available) {
+      try {
+        removable = await apiFetch("/api/v1/disks/removable");
+      } catch (_ignored) {
+        removable = null; // an older helper without removable.devices
+      }
+    }
+    renderUsb(status, removable);
   } catch (_ignored) {
     // reported below
   }
@@ -376,7 +413,6 @@ async function refresh() {
       apiFetch("/api/v1/storage/raid"),
     ]);
     renderHelperBadge(status);
-    renderUsb(status, disks);
     renderDisks(disks);
     renderVolumes(volumes);
     renderRaid(raid.arrays);
@@ -386,6 +422,7 @@ async function refresh() {
 }
 
 document.getElementById("mount-preview-btn")?.addEventListener("click", previewMount);
+document.getElementById("usb-retry")?.addEventListener("click", retryUsb);
 refresh();
 // USB drives come and go: refresh while the page is visible and no dialog is open.
 window.setInterval(() => {

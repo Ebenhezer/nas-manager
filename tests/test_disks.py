@@ -277,9 +277,13 @@ def csrf_header(disks_client: TestClient) -> dict[str, str]:
     return {"X-CSRF-Token": disks_client.cookies["nas_csrf"]}
 
 
+calls: list[tuple[str, dict[str, object]]] = []
+
+
 @pytest.fixture
 def fake_helper(monkeypatch: pytest.MonkeyPatch) -> None:
     """Substitute the helper client with canned discovery/action responses."""
+    calls.clear()
 
     def call_helper(settings: Settings, op: str, params: dict[str, object]) -> dict[str, object]:
         if op == "ping":
@@ -305,6 +309,22 @@ def fake_helper(monkeypatch: pytest.MonkeyPatch) -> None:
             return {"device": f"/dev/{params['name']}", "mountpoint": str(params["mountpoint"])}
         if op == "raid.scrub":
             return {"name": str(params["name"]), "sync_action": "check", "previous_action": "idle"}
+        if op == "removable.status":
+            return {"automount": True, "mount_dir": "/media/nas-manager", "poll_seconds": 3}
+        if op in {"removable.devices", "removable.reconcile"}:
+            device = {
+                "name": "sda1",
+                "device": "/dev/sda1",
+                "label": "UDISK",
+                "uuid": "1234-ABCD",
+                "fstype": "exfat",
+                "size_bytes": 62_914_560_000,
+                "state": "failed",
+                "reason": "this system has no exFAT driver: install exfatprogs",
+                "mountpoint": None,
+            }
+            calls.append((op, dict(params)))
+            return {"automount": True, "events": [], "devices": [device]}
         raise AssertionError(f"fake_helper got unexpected op {op!r}")
 
     monkeypatch.setattr(disks_service, "call_helper", call_helper)
@@ -638,3 +658,34 @@ def test_samba_apply_via_helper_writes_and_reloads(
 
     status = disks_client.get("/api/v1/samba/status").json()
     assert status["reload_required"] is False
+
+
+# --------------------------------------------------------------------------
+# USB drives (Phase 16)
+# --------------------------------------------------------------------------
+
+
+def test_removable_devices_and_retry(
+    disks_app: FastAPI, disks_client: TestClient, csrf_header: dict[str, str], fake_helper: None
+) -> None:
+    status = disks_client.get("/api/v1/disks/status").json()
+    assert status["removable_automount"] is True
+    assert status["removable_mount_dir"] == "/media/nas-manager"
+    listing = disks_client.get("/api/v1/disks/removable")
+    assert listing.status_code == 200, listing.text
+    device = listing.json()["devices"][0]
+    assert device["fstype"] == "exfat" and device["state"] == "failed"
+    assert "exFAT driver" in device["reason"]
+    assert disks_client.post("/api/v1/disks/removable/rescan").status_code == 403  # no CSRF
+    retried = disks_client.post("/api/v1/disks/removable/rescan", headers=csrf_header)
+    assert retried.status_code == 200, retried.text
+    assert ("removable.reconcile", {"retry": True}) in calls
+    from sqlalchemy import select
+
+    from app.models import AuditEvent
+
+    with disks_app.state.db.session_factory() as session:
+        events = session.execute(
+            select(AuditEvent.event).where(AuditEvent.event == "disk.removable_rescan")
+        ).all()
+    assert len(events) == 1

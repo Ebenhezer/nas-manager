@@ -22,6 +22,7 @@ from app.schemas.disks import (
     OperationResult,
     PhysicalDisk,
     RaidList,
+    RemovableDevices,
     ScrubPreview,
     ScrubRequest,
     SmartData,
@@ -46,6 +47,26 @@ def _settings(request: Request) -> Settings:
 @router.get("/status", response_model=HelperStatus)
 def helper_status(request: Request, current: CurrentUser = Depends(DISKS_READ)) -> HelperStatus:
     return disks_service.helper_status(_settings(request))
+
+
+@router.get("/removable", response_model=RemovableDevices)
+def removable_devices(
+    request: Request, current: CurrentUser = Depends(DISKS_READ)
+) -> RemovableDevices:
+    """USB drives and why each one is (or is not) mounted (Phase 16)."""
+    return disks_service.removable_devices(_settings(request))
+
+
+@router.post("/removable/rescan", response_model=RemovableDevices)
+def rescan_removable(
+    request: Request,
+    current: CurrentUser = Depends(DISKS_WRITE),
+    db: Session = Depends(get_db),
+) -> RemovableDevices:
+    """Look for USB drives now and retry failed mounts ("Try again")."""
+    return disks_service.removable_rescan(
+        db, _settings(request), actor=current.user, context=request_audit_context(request)
+    )
 
 
 @router.get("", response_model=list[PhysicalDisk])
