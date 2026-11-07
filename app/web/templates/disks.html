@@ -8,6 +8,23 @@
 <div id="error-banner" class="alert alert-danger d-none" role="alert"></div>
 
 <div class="card mb-4">
+  <div class="card-header d-flex align-items-center justify-content-between">
+    <span>USB drives</span>
+    <span class="small" id="usb-automount"></span>
+  </div>
+  <div class="card-body">
+    <p class="small text-body-secondary mb-3" id="usb-explainer">
+      A disk's files can only be opened once it is <em>mounted</em> (attached to a folder);
+      <em>unmounting</em> finishes writing and detaches it, like Windows' "Eject".
+      USB drives are handled automatically: they are mounted when plugged in and unmounted when removed.
+      Internal disks stay manual (below), so a data disk is never attached by accident.
+      {% if can('files:read') or can('removable:read') %}Open plugged-in drives on the <a href="/files">Files</a> page to copy files to and from them.{% endif %}
+    </p>
+    <ul class="list-unstyled mb-0" id="usb-list"></ul>
+  </div>
+</div>
+
+<div class="card mb-4">
   <div class="card-header">Physical disks</div>
   <div class="table-responsive">
     <table class="table table-striped align-middle mb-0">

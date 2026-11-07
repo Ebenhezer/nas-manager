@@ -24,6 +24,7 @@ from app.core.middleware import RequestContextMiddleware
 from app.db.migrations import get_current_revision, get_head_revision, upgrade_to_head
 from app.db.session import Database, redact_url
 from app.services import audit
+from app.services.file_transfers import TransferManager
 from app.services.monitoring import prime_cpu_counter
 from app.services.settings_service import ensure_instance_id
 from app.services.syslog.log_handler import reload_log_forwarding
@@ -105,6 +106,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 app.state.instance_id = ensure_instance_id(session)
                 reload_log_forwarding(session)
                 _lifecycle_event(session, audit.SYSTEM_STARTED, settings)
+            interrupted = app.state.transfers.start()
+            if interrupted:
+                logger.warning("marked %s unfinished file transfers as interrupted", interrupted)
         else:
             app.state.instance_id = None
             logger.warning("database schema is not up to date; run: alembic upgrade head")
@@ -114,6 +118,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             if schema_current:
+                app.state.transfers.shutdown()
                 try:
                     with db.session_factory() as session:
                         _lifecycle_event(session, audit.SYSTEM_STOPPED, settings)
@@ -132,6 +137,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
     app.state.db = db
+    app.state.transfers = TransferManager(settings, db.session_factory)
     app.state.throttle = IpLoginThrottle(
         max_attempts=settings.login_ip_max_attempts,
         window_seconds=settings.login_ip_window_seconds,

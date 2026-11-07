@@ -1217,6 +1217,124 @@ body.mx-lightbox-open {
   }
 }
 
+/* ---------- Files page: locations, rows, transfers (Phase 16) ---------- */
+.fx-location-wrap {
+  margin-bottom: 0.15rem;
+}
+
+.fx-location-wrap .mx-tree-row.is-drop-target,
+.fx-row.is-drop-target > td {
+  outline: 2px dashed var(--bs-primary);
+  outline-offset: -2px;
+  background-color: var(--bs-primary-bg-subtle);
+}
+
+.fx-usage-wrap {
+  padding: 0 0.6rem 0.35rem 1.9rem;
+}
+
+.fx-usage {
+  height: 0.3rem;
+}
+
+.fx-usage-text {
+  font-size: 0.72rem;
+  color: var(--bs-secondary-color);
+}
+
+.fx-content {
+  user-select: none;
+}
+
+.fx-table .fx-col-check {
+  width: 2rem;
+}
+
+.fx-row {
+  cursor: default;
+}
+
+.fx-row.is-selected > td {
+  background-color: var(--bs-primary-bg-subtle);
+}
+
+.fx-name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.fx-file-icon {
+  color: var(--bs-secondary-color);
+}
+
+.fx-transfers {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 1050;
+  width: min(24rem, calc(100vw - 2rem));
+  border: var(--bs-border-width) solid var(--bs-border-color);
+  border-radius: 0.75rem;
+  background-color: var(--bs-body-bg);
+  box-shadow: var(--bs-box-shadow);
+  overflow: hidden;
+}
+
+.fx-transfers-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 0;
+  background-color: var(--bs-tertiary-bg);
+  color: var(--bs-emphasis-color);
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.fx-transfers-list {
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.fx-transfer {
+  padding: 0.5rem 0.75rem;
+  border-top: var(--bs-border-width) solid var(--bs-border-color);
+  font-size: 0.8rem;
+}
+
+.fx-transfer-title {
+  font-weight: 500;
+  margin-bottom: 0.25rem;
+}
+
+.fx-transfer-bar {
+  height: 0.4rem;
+  margin-bottom: 0.25rem;
+}
+
+.fx-transfer-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  color: var(--bs-secondary-color);
+}
+
+.fx-transfer-errors {
+  margin-top: 0.25rem;
+  color: var(--bs-danger-text-emphasis);
+}
+
+.fx-transfer-errors ul {
+  max-height: 8rem;
+  overflow-y: auto;
+  padding-left: 1rem;
+}
+
 /* Monitoring (Phase 10) */
 .monitor-chart {
   border: 1px solid var(--bs-border-color);

@@ -21,6 +21,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from app.core.config import Settings
+from app.helper import removable
 from app.helper.operations import HelperError, UnknownOperationError, dispatch
 from app.helper.protocol import read_frame, write_frame
 
@@ -141,6 +142,13 @@ def serve(settings: Settings) -> None:
                 "socket_group": settings.helper_socket_group,
             },
         )
+        if settings.removable_automount:
+            threading.Thread(
+                target=removable.run_loop,
+                args=(settings, stop_event),
+                name="removable",
+                daemon=True,
+            ).start()
         with ThreadPoolExecutor(max_workers=_MAX_WORKERS, thread_name_prefix="helper") as pool:
             while not stop_event.is_set():
                 try:

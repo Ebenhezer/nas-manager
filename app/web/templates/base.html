@@ -75,7 +75,7 @@
           </a>
         </div>
         {% endif %}
-        {% if can('disks:read') or can('files:read') or can('samba:read') or can('uploads:read') %}
+        {% if can('disks:read') or can('files:read') or can('removable:read') or can('samba:read') or can('uploads:read') %}
         <div class="app-nav-section" role="group" aria-labelledby="nav-sec-storage">
           <div class="app-nav-label" id="nav-sec-storage">Storage</div>
           {% if can('disks:read') %}
@@ -88,7 +88,7 @@
             <span>Disks</span>
           </a>
           {% endif %}
-          {% if can('files:read') %}
+          {% if can('files:read') or can('removable:read') %}
           <a class="app-nav-link{% if request.url.path == '/files' %} active{% endif %}" href="/files"{% if request.url.path == '/files' %} aria-current="page"{% endif %}>
             <svg class="app-nav-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M8 3h8v3h-8zM4 6h16v12h-16z"/>

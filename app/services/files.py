@@ -68,6 +68,30 @@ def resolve_root(settings: Settings, root_str: str) -> Path:
     raise NotFoundError("Unknown file root", details={"root": root_str})
 
 
+def resolve_location(settings: Settings, root_str: str, *, allow_removable: bool = False) -> Path:
+    """A configured root, or (only when the caller checked ``removable:*``) a
+    plugged-in USB drive (Phase 16). Other features keep using
+    ``resolve_root``, so a USB stick can never become a share or library."""
+    try:
+        return resolve_root(settings, root_str)
+    except NotFoundError:
+        if not allow_removable:
+            raise
+    from app.services import removable
+
+    return removable.resolve_drive(settings, root_str)
+
+
+def is_removable_root(settings: Settings, root: Path) -> bool:
+    return root.parent == settings.removable_mount_dir
+
+
+def _journal(session: Session, settings: Settings, root: Path, **change: object) -> None:
+    """Record a change for mobile sync clients; USB drives are not synced."""
+    if not is_removable_root(settings, root):
+        sync.record_change(session, root=str(root), **change)  # type: ignore[arg-type]
+
+
 def resolve_in_root(root: Path, rel_path: str) -> Path:
     """Resolve ``rel_path`` against ``root`` and refuse anything that escapes."""
     if "\x00" in rel_path:
@@ -114,9 +138,10 @@ def list_dir(
     settings: Settings,
     *,
     root_str: str,
+    allow_removable: bool = False,
     rel_path: str,
 ) -> tuple[str, str, list[FileEntry]]:
-    root = resolve_root(settings, root_str)
+    root = resolve_location(settings, root_str, allow_removable=allow_removable)
     target = resolve_in_root(root, rel_path)
     if not target.is_dir():
         raise BadRequestError("Not a directory", details={"path": rel_path})
@@ -134,11 +159,12 @@ def download_path(
     settings: Settings,
     *,
     root_str: str,
+    allow_removable: bool = False,
     rel_path: str,
     actor: User,
     context: dict[str, str | None] | None = None,
 ) -> Path:
-    root = resolve_root(settings, root_str)
+    root = resolve_location(settings, root_str, allow_removable=allow_removable)
     target = resolve_in_root(root, rel_path)
     if not target.is_file():
         raise NotFoundError("File not found", details={"path": rel_path})
@@ -158,10 +184,16 @@ def download_path(
 
 
 def prepare_upload_target(
-    settings: Settings, *, root_str: str, rel_dir: str, filename: str, overwrite: bool
+    settings: Settings,
+    *,
+    root_str: str,
+    allow_removable: bool = False,
+    rel_dir: str,
+    filename: str,
+    overwrite: bool,
 ) -> tuple[Path, Path]:
     """Validate an upload destination and return ``(root, target)``."""
-    root = resolve_root(settings, root_str)
+    root = resolve_location(settings, root_str, allow_removable=allow_removable)
     directory = resolve_in_root(root, rel_dir)
     if not directory.is_dir():
         raise BadRequestError("Upload target is not a directory")
@@ -181,6 +213,7 @@ def upload(
     settings: Settings,
     *,
     root_str: str,
+    allow_removable: bool = False,
     rel_dir: str,
     filename: str,
     source: BinaryIO,
@@ -189,7 +222,12 @@ def upload(
     context: dict[str, str | None] | None = None,
 ) -> FileEntry:
     root, target = prepare_upload_target(
-        settings, root_str=root_str, rel_dir=rel_dir, filename=filename, overwrite=overwrite
+        settings,
+        root_str=root_str,
+        allow_removable=allow_removable,
+        rel_dir=rel_dir,
+        filename=filename,
+        overwrite=overwrite,
     )
     temporary = target.parent / f"{_UPLOAD_TMP_PREFIX}{uuid.uuid4().hex}.part"
     total = 0
@@ -218,6 +256,7 @@ def upload(
         overwrite=overwrite,
         actor=actor,
         context=context,
+        journal=not is_removable_root(settings, root),
     )
 
 
@@ -231,6 +270,7 @@ def commit_staged(
     overwrite: bool,
     actor: User,
     context: dict[str, str | None] | None = None,
+    journal: bool = True,
 ) -> FileEntry:
     """Move a fully written temp file into place, then audit and journal it.
 
@@ -267,14 +307,15 @@ def commit_staged(
         **_audit_ctx(context),
         commit=False,
     )
-    sync.record_change(
-        session,
-        root=str(root),
-        path=rel_path,
-        kind=CHANGE_MODIFIED if existed else CHANGE_CREATED,
-        size_bytes=size,
-        actor=actor,
-    )
+    if journal:
+        sync.record_change(
+            session,
+            root=str(root),
+            path=rel_path,
+            kind=CHANGE_MODIFIED if existed else CHANGE_CREATED,
+            size_bytes=size,
+            actor=actor,
+        )
     session.commit()
     return _entry_for(target, root)
 
@@ -284,12 +325,13 @@ def mkdir(
     settings: Settings,
     *,
     root_str: str,
+    allow_removable: bool = False,
     rel_path: str,
     name: str,
     actor: User,
     context: dict[str, str | None] | None = None,
 ) -> FileEntry:
-    root = resolve_root(settings, root_str)
+    root = resolve_location(settings, root_str, allow_removable=allow_removable)
     parent = resolve_in_root(root, rel_path)
     if not parent.is_dir():
         raise BadRequestError("Parent is not a directory")
@@ -312,8 +354,8 @@ def mkdir(
         **_audit_ctx(context),
         commit=False,
     )
-    sync.record_change(
-        session, root=str(root), path=rel_path_new, kind=CHANGE_CREATED, is_dir=True, actor=actor
+    _journal(
+        session, settings, root, path=rel_path_new, kind=CHANGE_CREATED, is_dir=True, actor=actor
     )
     session.commit()
     return _entry_for(target, root)
@@ -324,12 +366,13 @@ def rename(
     settings: Settings,
     *,
     root_str: str,
+    allow_removable: bool = False,
     rel_path: str,
     new_name: str,
     actor: User,
     context: dict[str, str | None] | None = None,
 ) -> FileEntry:
-    root = resolve_root(settings, root_str)
+    root = resolve_location(settings, root_str, allow_removable=allow_removable)
     source = resolve_in_root(root, rel_path)
     if source == root.resolve(strict=False):
         raise BadRequestError("Cannot rename the root directory")
@@ -356,9 +399,10 @@ def rename(
         **_audit_ctx(context),
         commit=False,
     )
-    sync.record_change(
+    _journal(
         session,
-        root=str(root),
+        settings,
+        root,
         path=rel_path_new,
         old_path=rel_path_old,
         kind=CHANGE_RENAMED,
@@ -374,12 +418,13 @@ def delete(
     settings: Settings,
     *,
     root_str: str,
+    allow_removable: bool = False,
     rel_path: str,
     recursive: bool,
     actor: User,
     context: dict[str, str | None] | None = None,
 ) -> None:
-    root = resolve_root(settings, root_str)
+    root = resolve_location(settings, root_str, allow_removable=allow_removable)
     target = resolve_in_root(root, rel_path)
     if target == root.resolve(strict=False):
         raise BadRequestError("Cannot delete the root directory")
@@ -409,9 +454,10 @@ def delete(
         **_audit_ctx(context),
         commit=False,
     )
-    sync.record_change(
+    _journal(
         session,
-        root=str(root),
+        settings,
+        root,
         path=str(target.relative_to(root.resolve(strict=False))),
         kind=CHANGE_DELETED,
         is_dir=is_dir,
@@ -425,10 +471,11 @@ def search(
     settings: Settings,
     *,
     root_str: str,
+    allow_removable: bool = False,
     query: str,
     limit: int | None = None,
 ) -> tuple[str, str, list[FileEntry]]:
-    root = resolve_root(settings, root_str)
+    root = resolve_location(settings, root_str, allow_removable=allow_removable)
     needle = query.strip().lower()
     if not needle:
         raise BadRequestError("Search query is required")

@@ -91,6 +91,9 @@ class HelperStatus(BaseModel):
     available: bool
     socket: str
     error: str | None = None
+    # USB drives (Phase 16), as the helper reports them (it does the mounting).
+    removable_automount: bool | None = None
+    removable_mount_dir: str | None = None
 
 
 class MountRequest(BaseModel):

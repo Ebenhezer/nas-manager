@@ -96,6 +96,10 @@ FILE_DOWNLOADED = "file.downloaded"
 FILE_DELETED = "file.deleted"
 FILE_RENAMED = "file.renamed"
 FILE_CREATED_DIR = "file.created_dir"
+# Copy/move jobs from the Files page (Phase 16)
+FILE_TRANSFER_STARTED = "file_transfer.started"
+FILE_TRANSFER_FINISHED = "file_transfer.finished"
+FILE_TRANSFER_CANCEL_REQUESTED = "file_transfer.cancel_requested"
 
 # samba events (Phase 3)
 SAMBA_SHARE_CREATED = "samba.share.created"
@@ -170,6 +174,10 @@ MEDIA_ALBUM_ITEMS_CHANGED = "media.album_items_changed"
 # Video streaming (Phase 9)
 MEDIA_TRANSCODE_REQUESTED = "media.transcode_requested"
 MEDIA_TRANSCODE_FAILED = "media.transcode_failed"
+# USB / removable drives mounted by the helper (Phase 16)
+DISK_REMOVABLE_MOUNTED = "disk.removable_mounted"
+DISK_REMOVABLE_UNMOUNTED = "disk.removable_unmounted"
+DISK_REMOVABLE_MOUNT_FAILED = "disk.removable_mount_failed"
 # Explorer-style gallery (Phase 15)
 MEDIA_ITEMS_DOWNLOADED = "media.items_downloaded"
 MEDIA_ITEMS_MOVED = "media.items_moved"

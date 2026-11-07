@@ -174,8 +174,9 @@ def files_page(
     redirect = _protected(current)
     if redirect is not None:
         return redirect
-    if current is None or "files:read" not in current.permissions:
-        raise UnauthorizedError("Missing required permission: files:read")
+    # NAS folders need files:read; USB drives (Phase 16) need removable:read.
+    if current is None or not ({"files:read", "removable:read"} & set(current.permissions)):
+        raise UnauthorizedError("Missing required permission: files:read or removable:read")
     return templates.TemplateResponse(request, "files.html", _page_context(request, current))
 
 

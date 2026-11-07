@@ -665,3 +665,37 @@ Delivered:
 | `ruff check` / `ruff format --check` | clean. `mypy`: no new errors in changed files (the environment's SQLAlchemy stubs report pre-existing errors elsewhere). |
 | JavaScript | parsed with esprima 4.0.1 after mapping `?.`/`??`; named imports checked against exports. |
 | Headless Chromium (Playwright, isolated server on port 8090, scratch data) | Exercised: browse/tree, all views, sort, selection (click/Shift/Ctrl/band/Ctrl+A), favorites, context menus, folder picker move, drag to tree folder, folder rename, item rename (F2), filters/chips, search, album add/remove, details header sort, lightbox (zoom, details, slideshow, Back closes), bulk delete, ZIP download, dark theme, 390 px width (no horizontal overflow), read-only user (no write controls). No console errors. |
+
+## Phase 16: completed
+
+USB drives mounted automatically and copied to from the Files page.
+
+Delivered:
+
+- **Helper auto-mount** (`app/helper/removable.py`): a polling thread (`NAS_REMOVABLE_POLL_SECONDS`, default 3) mounts unmounted partitions of USB/removable disks with a supported file system under `NAS_REMOVABLE_MOUNT_DIR/<label>`.
+  - Mount options are fixed: `nosuid,nodev,noexec`; FAT/exFAT/NTFS owned by `root:<service group>` with group read/write; `flush` for vfat.
+  - Drives that are pulled out are lazily unmounted and their folders removed.
+  - Never mounted: internal disks, RAID members, LUKS, swap and `/etc/fstab` entries.
+  - New ops: `removable.status`, `removable.reconcile`, `removable.events`, `removable.flush`. The worker records the events as `disk.removable_*` audit events.
+- **Permissions**: `removable:read` / `removable:write` (migration 0015 grants them to admin and operator). The Files API checks `files:*` or `removable:*` per requested root. Unknown roots stay 403 without NAS access. USB drives never reach `/files/roots`, shares, libraries or backups, and are not journaled for sync.
+- **Transfers** (`file_transfers` table, `app/services/file_transfers.py`): background copy/move in the web process.
+  - Files are written to hidden part files, fsynced and renamed; folders are merged; conflicts follow keep_both/skip/replace.
+  - A move renames within a file system, otherwise copies and then deletes each source.
+  - Symlinks are skipped; errors are explained per file (4 GB on FAT32, invalid names, a full or removed drive).
+  - Transfers can be cancelled; restarts mark them interrupted; USB destinations are flushed at the end.
+- **Files page**:
+  - Locations pane with NAS roots and USB drives (free-space bars, polled every 5 s, connect/remove notices).
+  - Multi-select, Copy/Cut/Paste (Ctrl+C/X/V), Copy to…/Move to… picker with New folder.
+  - Drag & drop onto folders or locations (Windows rules: copy across locations, move within one, Shift moves).
+  - Conflict prompt, desktop drop to upload, context menu, transfer panel with progress and cancel.
+- **Disks page**: a USB drives card explaining mounting, the automatic state reported by the helper, and the plugged-in drives.
+- **Deploy**: `ReadWritePaths=-/media/nas-manager` in the web and worker units; `install.sh` creates the folder; settings documented in both env templates.
+
+### Verification
+
+| Check | Result |
+|-------|--------|
+| `pytest` (all but `test_remote_providers.py`, which needs boto3 here) | 883 passed, 1 skipped, 3 failed: operator tests that expected `/files` to stay closed. Updated for the new permission and re-run: 37 passed. New: `test_removable_helper.py` (10), `test_file_transfers.py` (12), the 0015 migration round trip, and the Files page id check. |
+| `ruff` / `ruff format` | clean; mypy finds no errors in the new modules |
+| Headless Chromium against an isolated server, with a tmpfs mounted under the scratch removable dir as the "USB drive" | Copy to… the drive, Ctrl+C/Ctrl+V, conflict prompt (keep both), drag USB → NAS, delete on USB, operator sees only USB, Disks card, phone width; no page errors |
+| Live helper mount on a real device | **not run** (user decision). Real USB hot-plug cannot be exercised in this container. |

@@ -72,6 +72,18 @@ class Settings(BaseSettings):
     # root:<group> so the unprivileged service user can connect through it.
     helper_socket_group: str = "nas-manager"
 
+    # ------------------------------------------------------------------
+    # USB / removable drives (Phase 16). The helper mounts hot-plugged USB
+    # drives under NAS_REMOVABLE_MOUNT_DIR with fixed safe options and
+    # unmounts them when they disappear; the Files page shows them to users
+    # holding removable:read / removable:write.
+    # ------------------------------------------------------------------
+    removable_mount_dir: Path = Path("/media/nas-manager")
+    removable_automount: bool = True
+    removable_poll_seconds: int = Field(default=3, ge=1, le=300)
+    # Background copy/move jobs run in the web process (Files page).
+    file_transfer_workers: int = Field(default=2, ge=1, le=16)
+
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     log_format: Literal["json", "text"] = "json"
     log_to_console: bool = True
@@ -322,6 +334,7 @@ class Settings(BaseSettings):
         "ffprobe_path",
         "systemctl_path",
         "backup_staging_dir",
+        "removable_mount_dir",
     )
     @classmethod
     def _absolute(cls, value: Path | None) -> Path | None:

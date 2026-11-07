@@ -50,7 +50,9 @@ def test_operator_locked_out_by_default(app: FastAPI, admin_user: User) -> None:
     assert client.get("/api/v1/samba/shares").status_code == 403
     assert client.get("/api/v1/samba/status").status_code == 403
     # Web pages: authenticated but not permitted -> 401 (existing convention).
-    assert client.get("/files", follow_redirects=False).status_code == 401
+    # Files opens for operators since Phase 16 (USB drives via removable:read);
+    # the NAS roots above stay 403.
+    assert client.get("/files", follow_redirects=False).status_code == 200
     assert client.get("/samba", follow_redirects=False).status_code == 401
 
 

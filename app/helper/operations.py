@@ -52,7 +52,8 @@ _RUN_TIMEOUT_SECONDS = 30
 _SMART_TIMEOUT_SECONDS = 60
 
 LSBLK_COLUMNS = (
-    "NAME,PATH,TYPE,SIZE,ROTA,TRAN,MODEL,SERIAL,WWN,MOUNTPOINT,FSTYPE,LABEL,PARTLABEL,UUID"
+    "NAME,PATH,TYPE,SIZE,ROTA,TRAN,MODEL,SERIAL,WWN,MOUNTPOINT,FSTYPE,LABEL,PARTLABEL,UUID,"
+    "RM,HOTPLUG"
 )
 FINDMNT_COLUMNS = "TARGET,SOURCE,FSTYPE,OPTIONS,USED,AVAIL,SIZE"
 
@@ -414,6 +415,43 @@ def _atomic_replace(config_path: Path, text: str) -> None:
 
 OperationHandler = Callable[[dict[str, Any], Settings], dict[str, Any]]
 
+# --------------------------------------------------------------------------
+# USB / removable drives (Phase 16; the policy lives in app.helper.removable)
+# --------------------------------------------------------------------------
+
+
+def _op_removable_status(params: dict[str, Any], settings: Settings) -> dict[str, Any]:
+    del params
+    return {
+        "automount": settings.removable_automount,
+        "mount_dir": str(settings.removable_mount_dir),
+        "poll_seconds": settings.removable_poll_seconds,
+    }
+
+
+def _op_removable_reconcile(params: dict[str, Any], settings: Settings) -> dict[str, Any]:
+    del params
+    from app.helper import removable
+
+    if not settings.removable_automount:
+        raise OperationFailedError("automatic mounting of removable drives is turned off")
+    return {"events": removable.reconcile(settings)}
+
+
+def _op_removable_events(params: dict[str, Any], settings: Settings) -> dict[str, Any]:
+    del params, settings
+    from app.helper import removable
+
+    return {"events": removable.drain_events()}
+
+
+def _op_removable_flush(params: dict[str, Any], settings: Settings) -> dict[str, Any]:
+    from app.helper import removable
+
+    mountpoint = validate_mountpoint(str(params.get("mountpoint", "")))
+    return removable.flush(settings, mountpoint)
+
+
 OPERATIONS: dict[str, OperationHandler] = {
     "ping": _op_ping,
     "disk.list": _op_disk_list,
@@ -425,6 +463,10 @@ OPERATIONS: dict[str, OperationHandler] = {
     "unmount": _op_unmount,
     "raid.scrub": _op_raid_scrub,
     "samba.apply": _op_samba_apply,
+    "removable.status": _op_removable_status,
+    "removable.reconcile": _op_removable_reconcile,
+    "removable.events": _op_removable_events,
+    "removable.flush": _op_removable_flush,
 }
 
 

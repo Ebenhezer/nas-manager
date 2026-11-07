@@ -420,7 +420,14 @@ def helper_status(settings: Settings) -> HelperStatus:
     except Exception as exc:  # every failure means "unavailable"
         logger.warning("helper probe failed", extra={"error": str(exc)})
         return HelperStatus(enabled=True, available=False, socket=socket_path, error=str(exc))
-    return HelperStatus(enabled=True, available=True, socket=socket_path)
+    status = HelperStatus(enabled=True, available=True, socket=socket_path)
+    try:
+        removable = call_helper(settings, "removable.status", {})
+    except Exception:  # an older helper without USB support
+        return status
+    status.removable_automount = bool(removable.get("automount"))
+    status.removable_mount_dir = removable.get("mount_dir")
+    return status
 
 
 def list_disks(settings: Settings) -> list[PhysicalDisk]:

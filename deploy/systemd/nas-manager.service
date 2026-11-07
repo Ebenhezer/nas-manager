@@ -38,6 +38,10 @@ UMask=0027
 # ReadWritePaths=/srv/nas /srv/media
 # Privileged operations go through a separate allowlisted helper service
 # (Phase 5), never through this unit.
+# USB drives the helper mounts under NAS_REMOVABLE_MOUNT_DIR (Phase 16). The
+# "-" keeps the unit starting when the folder does not exist; new mounts
+# propagate into this unit's namespace.
+ReadWritePaths=-/media/nas-manager
 NoNewPrivileges=true
 CapabilityBoundingSet=
 AmbientCapabilities=

@@ -1,6 +1,6 @@
 # NAS Manager — Master Plan
 
-> Status: Phases 1–15 are **done and verified** (see `docs/IMPLEMENTATION_PLAN.md`), including a
+> Status: Phases 1–16 are **done and verified** (see `docs/IMPLEMENTATION_PLAN.md`), including a
 > live systemd deployment in Phase 14. This file is the authoritative copy of the project contract below.
 
 ---

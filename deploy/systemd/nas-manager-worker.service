@@ -51,6 +51,10 @@ IOSchedulingPriority=7
 # outside /var/lib/nas-manager must be listed here too, e.g.:
 # ReadWritePaths=/srv/nas /srv/media /mnt/backup-usb
 # System-state backups read NAS_SAMBA_CONFIG_PATH (world-readable by default).
+# USB drives the helper mounts under NAS_REMOVABLE_MOUNT_DIR (Phase 16). The
+# "-" keeps the unit starting when the folder does not exist; new mounts
+# propagate into this unit's namespace.
+ReadWritePaths=-/media/nas-manager
 NoNewPrivileges=true
 CapabilityBoundingSet=
 AmbientCapabilities=

@@ -13,6 +13,7 @@ from app.models.backup import (
 )
 from app.models.config_import import ConfigImportRun
 from app.models.file_change import FileChange
+from app.models.file_transfer import FileTransfer
 from app.models.group import Group
 from app.models.media import (
     MediaAlbum,
@@ -63,6 +64,7 @@ __all__ = [
     "BackupSnapshot",
     "ConfigImportRun",
     "FileChange",
+    "FileTransfer",
     "Group",
     "MediaAlbum",
     "MediaAlbumItem",

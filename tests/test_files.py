@@ -274,7 +274,8 @@ def test_operator_locked_out_by_default(app: FastAPI, admin_user: User) -> None:
         assert response.status_code == 200
         headers = _csrf(client)
         assert client.get(f"/api/v1/files/list?root={_root(app)}").status_code == 403
-        assert client.get("/files", follow_redirects=False).status_code == 401
+        # The page opens for operators (USB drives, Phase 16); NAS folders stay locked.
+        assert client.get("/files", follow_redirects=False).status_code == 200
         assert (
             client.post(
                 "/api/v1/files/upload",

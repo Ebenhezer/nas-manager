@@ -1,42 +1,111 @@
 {% extends "base.html" %}
 {% block title %}Files · {{ app_name }}{% endblock %}
+{% block main_layout %}app-content app-content-wide{% endblock %}
 {% block content %}
-<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
-  <h1 class="h3 mb-0">Files</h1>
-  <div class="d-flex gap-2 align-items-center">
-    <select id="root-select" class="form-select form-select-sm" aria-label="Managed root"></select>
-    <input id="search-input" class="form-control form-control-sm" type="search"
-           placeholder="Search names…">
-  </div>
-</div>
 <div id="error-banner" class="alert alert-danger d-none" role="alert"></div>
-<div class="card mb-3">
-  <div class="card-body py-2 d-flex flex-wrap align-items-center gap-2">
-    <nav aria-label="Breadcrumb"><ol id="breadcrumb" class="breadcrumb mb-0"></ol></nav>
-    {% if can('files:write') %}
-    <div class="ms-auto d-flex flex-wrap gap-2 align-items-center">
-      <form id="upload-form" class="d-flex gap-2 align-items-center">
-        <input type="file" id="upload-input" class="form-control form-control-sm" required>
-        <button type="submit" class="btn btn-sm btn-primary">Upload</button>
-      </form>
-      <button type="button" id="mkdir-btn" class="btn btn-sm btn-outline-secondary">New folder</button>
+<div id="info-banner" class="alert alert-info d-none" role="status"></div>
+
+<div id="files-root" class="mx-explorer"
+     data-can-read-nas="{{ 'true' if can('files:read') else 'false' }}"
+     data-can-read-usb="{{ 'true' if can('removable:read') else 'false' }}">
+
+  <!-- Locations: NAS folders and plugged-in USB drives -->
+  <aside class="offcanvas-lg offcanvas-start mx-nav" id="fx-nav" tabindex="-1" aria-label="Locations">
+    <div class="offcanvas-header d-lg-none">
+      <h2 class="offcanvas-title h6 mb-0">Locations</h2>
+      <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#fx-nav" aria-label="Close"></button>
     </div>
-    {% endif %}
-  </div>
+    <div class="offcanvas-body mx-nav-body" id="fx-locations"></div>
+  </aside>
+
+  <section class="mx-main" aria-labelledby="fx-heading">
+    <h1 class="visually-hidden" id="fx-heading">Files</h1>
+
+    <div class="mx-toolbar mx-addressbar">
+      <button type="button" class="btn btn-sm btn-outline-secondary d-lg-none" data-bs-toggle="offcanvas" data-bs-target="#fx-nav" aria-controls="fx-nav" aria-label="Show locations" data-icon="menu"></button>
+      <div class="btn-group btn-group-sm" role="group" aria-label="Navigation">
+        <button type="button" class="btn btn-outline-secondary" id="fx-up" title="Up one level (Backspace)" aria-label="Up one level" data-icon="arrowUp"></button>
+        <button type="button" class="btn btn-outline-secondary" id="fx-refresh" title="Refresh" aria-label="Refresh" data-icon="refresh"></button>
+      </div>
+      <nav class="mx-breadcrumb" id="fx-breadcrumb" aria-label="Current folder"></nav>
+      <div class="mx-search">
+        <span class="mx-search-icon" data-icon="search"></span>
+        <input type="search" class="form-control form-control-sm" id="fx-search" maxlength="255" placeholder="Search" aria-label="Search this location (Enter)">
+      </div>
+    </div>
+
+    <div class="mx-toolbar mx-commandbar">
+      <div class="d-flex flex-wrap gap-1">
+        <button type="button" class="btn btn-sm btn-primary" id="fx-upload" data-icon="upload"> Upload</button>
+        <input type="file" id="fx-upload-input" class="d-none" multiple>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="fx-new-folder" data-icon="folderPlus"> New folder</button>
+      </div>
+      <div class="d-flex flex-wrap gap-1" role="group" aria-label="Clipboard">
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="fx-copy" title="Copy (Ctrl+C)" data-icon="copy"> Copy</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="fx-cut" title="Cut (Ctrl+X)" data-icon="move"> Cut</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="fx-paste" title="Paste (Ctrl+V)" data-icon="clipboard"> Paste</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="fx-copy-to" data-icon="usb"> Copy to…</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="fx-move-to"> Move to…</button>
+      </div>
+      <div class="d-flex flex-wrap gap-1 ms-auto">
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="fx-download" data-icon="download"> Download</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="fx-rename" title="Rename (F2)" data-icon="edit"> Rename</button>
+        <button type="button" class="btn btn-sm btn-outline-danger" id="fx-delete" title="Delete (Del)" data-icon="trash"> Delete</button>
+      </div>
+    </div>
+
+    <div class="mx-content fx-content" id="fx-content" tabindex="-1">
+      <div class="mx-drop-overlay d-none" id="fx-drop-overlay">
+        <span data-icon="upload" data-icon-size="32"></span>
+        <span>Drop files to upload them here</span>
+      </div>
+      <table class="table table-sm table-hover align-middle mb-0 mx-details fx-table" aria-label="Folder contents">
+        <thead>
+          <tr>
+            <th scope="col" class="fx-col-check"><input class="form-check-input" type="checkbox" id="fx-select-all" aria-label="Select all"></th>
+            <th scope="col">Name</th>
+            <th scope="col">Date modified</th>
+            <th scope="col" class="text-end">Size</th>
+          </tr>
+        </thead>
+        <tbody id="fx-body"></tbody>
+      </table>
+      <p class="mx-empty d-none" id="fx-empty"></p>
+    </div>
+
+    <div class="mx-statusbar">
+      <span id="fx-status" aria-live="polite"></span>
+      <span id="fx-clipboard" class="ms-auto"></span>
+    </div>
+  </section>
 </div>
-<div class="card">
-  <div class="table-responsive">
-    <table class="table table-striped align-middle mb-0">
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Size</th>
-          <th>Modified</th>
-          {% if can('files:write') %}<th class="text-end">Actions</th>{% endif %}
-        </tr>
-      </thead>
-      <tbody id="files-body"></tbody>
-    </table>
+
+<!-- Copy / move progress -->
+<div class="fx-transfers d-none" id="fx-transfers" role="region" aria-label="Transfers">
+  <button type="button" class="fx-transfers-head" id="fx-transfers-toggle" aria-expanded="true">
+    <span id="fx-transfers-title">Transfers</span>
+    <span data-icon="chevronDown"></span>
+  </button>
+  <div class="fx-transfers-list" id="fx-transfers-list"></div>
+</div>
+
+<!-- Context menu (positioned at the pointer) -->
+<div class="dropdown-menu mx-context-menu" id="mx-context-menu" role="menu"></div>
+
+<!-- Generic dialog: confirm / prompt / pickers -->
+<div class="modal fade" id="mx-dialog" tabindex="-1" aria-labelledby="mx-dialog-title" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <form class="modal-content" id="mx-dialog-form">
+      <div class="modal-header">
+        <h2 class="modal-title h5" id="mx-dialog-title"></h2>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body" id="mx-dialog-body"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="mx-dialog-ok">OK</button>
+      </div>
+    </form>
   </div>
 </div>
 {% endblock %}

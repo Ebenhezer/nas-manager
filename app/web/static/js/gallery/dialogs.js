@@ -43,6 +43,12 @@ function open({ title, okLabel = "OK", danger = false, body, onShown }) {
   });
 }
 
+// A dialog with custom ``body`` nodes; resolves true on OK, null on cancel
+// (used by the Files page's location/folder picker).
+export function showDialog({ title, okLabel = "OK", danger = false, body, onShown }) {
+  return open({ title, okLabel, danger, body, onShown });
+}
+
 export async function confirmDialog({ title, message, okLabel = "OK", danger = false }) {
   const result = await open({ title, okLabel, danger, body: [el("p", { className: "mb-0", text: message })] });
   return result !== null;

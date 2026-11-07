@@ -159,6 +159,23 @@ def test_gallery_page_has_every_element_its_script_uses(page: TestClient) -> Non
     assert 'href="/gallery"' in html  # nav link
 
 
+def test_files_page_has_every_element_its_scripts_use(page: TestClient) -> None:
+    """files.js and the gallery modules it imports look elements up by id."""
+    import re
+
+    response = page.get("/files")
+    assert response.status_code == 200
+    html = response.text
+    sources = [STATIC_DIR / "js" / "files.js"] + [
+        STATIC_DIR / "js" / "gallery" / name for name in ("util.js", "menu.js", "dialogs.js")
+    ]
+    script = "\n".join(path.read_text() for path in sources)
+    ids = set(re.findall(r'getElementById\("([a-z0-9-]+)"\)', script))
+    assert ids, "expected getElementById lookups"
+    missing = sorted(i for i in ids if f'id="{i}"' not in html)
+    assert missing == []
+
+
 @pytest.mark.parametrize(
     ("path", "script"),
     [("/monitoring", "monitoring.js"), ("/alerts", "alerts.js"), ("/", "dashboard.js")],

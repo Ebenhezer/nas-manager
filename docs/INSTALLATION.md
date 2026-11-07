@@ -137,12 +137,23 @@ journalctl -u nas-manager-helper -n 50 --no-pager
 
 The helper runs in the host's mount namespace on purpose (no `PrivateTmp`/`ProtectHome`/`ProtectSystem`), so a disk it mounts is visible to Samba, the web unit and the shell. Its run directory `/run/nas-manager` is `0711` (traverse only) and the socket `0660 root:nas-manager`.
 
-Then open **Disks** in the UI: physical disks, mounted volumes and RAID arrays render from the helper; the badge in the header shows `helper online`. Mount/unmount/scrub flows always show a **preview first** (the exact action, warnings and data-loss notes) and require an explicit confirmation — nothing is ever mounted, unmounted or scrubbed automatically.
+Then open **Disks** in the UI: physical disks, mounted volumes and RAID arrays render from the helper; the badge in the header shows `helper online`. Mount/unmount/scrub flows always show a **preview first** (the exact action, warnings and data-loss notes) and require an explicit confirmation. Apart from USB drives (see below), nothing is ever mounted, unmounted or scrubbed automatically.
 
 - The helper binds `/run/nas-manager/helper.sock` (`0660 root:<group>`, in a `0711` directory) and accepts connections only from root or the UIDs in `NAS_HELPER_ALLOWED_UIDS` (the service user's UID; `SO_PEERCRED`-enforced) — no password/secret is shared over the wire.
 - Discovery (`lsblk`, `findmnt`, `/proc/mdstat`, `smartctl`) and actions (`mount`, `umount`, md `check` scrub, `smbcontrol all reload-config`) run in the helper with a fixed allowlist; the web process sends only validated parameter objects, never command lines.
 - With `NAS_HELPER_ENABLED=true`, **Samba Apply** now also writes `/etc/samba/smb.conf` (via the helper) and reloads `smbd`; the Samba page shows the helper state and `reload_required: false`.
 - **Test on a scratch disk only** (USB stick, a spare drive or a loop device: `truncate -s 64M /root/scratch.img && mkfs.ext4 /root/scratch.img && sudo losetup -f --show /root/scratch.img`), then use the Disks page to mount it under `/mnt` and unmount it again (`losetup -d /dev/loopN` afterwards). Never point the page at a disk holding data.
+
+### USB drives (Phase 16)
+
+With the helper installed, plugging in a USB stick or disk is enough. Within a few seconds (`NAS_REMOVABLE_POLL_SECONDS`, default 3) the helper mounts it under `/media/nas-manager/<label>`, and it appears under **USB drives** on the Files page and on the Disks page. When it is pulled out the helper unmounts it. Files copied from the Files page are flushed to the stick when the transfer shows "Done", so it can be pulled out right away. A stick pulled out during a copy fails that copy.
+
+- Supported: FAT32 (`vfat`), exFAT, NTFS (kernel `ntfs3` when available, else `ntfs-3g`), ext2/3/4, btrfs, xfs, HFS+. The Windows/Mac formats are fully writable. A Linux-formatted stick is writable only where its own permissions allow the `nas-manager` user, and is otherwise shown as read-only.
+- Who may use them: the `removable:read` / `removable:write` permissions (admin and operator by default; add them to other roles on the Roles page).
+- `install.sh` creates `/media/nas-manager` (`root:nas-manager 0750`), and both units list it in `ReadWritePaths`. If you change `NAS_REMOVABLE_MOUNT_DIR`, change `ReadWritePaths=-/media/nas-manager` in `nas-manager.service` and `nas-manager-worker.service` to match.
+- `NAS_REMOVABLE_AUTOMOUNT=false` (in the env file, then restart `nas-manager-helper`) turns automatic mounting off. Drives can then still be mounted by hand on the Disks page.
+- Internal disks are never mounted automatically, and neither are disks listed in `/etc/fstab`.
+- Check it: `journalctl -u nas-manager-helper | grep -i removable`, and the audit log (`disk.removable_mounted` / `disk.removable_unmounted`).
 
 ### Remote and cloud sync (Phase 7, sync worker)
 

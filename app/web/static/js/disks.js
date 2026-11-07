@@ -320,8 +320,54 @@ function renderHelperBadge(status) {
   }
 }
 
+function isUsb(disk) {
+  return disk.transport === "usb";
+}
+
+function renderUsb(status, disks) {
+  const automount = document.getElementById("usb-automount");
+  automount.replaceChildren();
+  if (!status.available) {
+    automount.append(badge("helper offline: no automatic mounting", "danger"));
+  } else if (status.removable_automount === false) {
+    automount.append(badge("automatic mounting is off", "secondary"));
+  } else if (status.removable_automount) {
+    automount.append(badge("automatic", "success"), " ", document.createTextNode(`mounted under ${status.removable_mount_dir}`));
+  }
+  const list = document.getElementById("usb-list");
+  list.replaceChildren();
+  const usb = disks.filter(isUsb);
+  if (!usb.length) {
+    const item = document.createElement("li");
+    item.className = "text-body-secondary small";
+    item.textContent = "No USB drive is plugged in.";
+    list.append(item);
+    return;
+  }
+  for (const disk of usb) {
+    const item = document.createElement("li");
+    item.className = "d-flex flex-wrap gap-2 align-items-center mb-1";
+    const name = document.createElement("strong");
+    name.textContent = `${disk.model || disk.name}`;
+    const mounted = disk.mountpoints.filter(Boolean);
+    item.append(
+      name,
+      document.createTextNode(` ${formatBytes(disk.size_bytes)} · /dev/${disk.name} `),
+      mounted.length ? badge("ready", "success") : badge("not mounted", "warning"),
+      document.createTextNode(mounted.length ? ` ${mounted.join(", ")}` : " (unsupported file system, or still being checked)"),
+    );
+    list.append(item);
+  }
+}
+
 async function refresh() {
   hideError();
+  try {
+    // The status never fails, so the USB card can say "helper offline".
+    renderUsb(await apiFetch("/api/v1/disks/status"), []);
+  } catch (_ignored) {
+    // reported below
+  }
   try {
     const [status, disks, volumes, raid] = await Promise.all([
       apiFetch("/api/v1/disks/status"),
@@ -330,6 +376,7 @@ async function refresh() {
       apiFetch("/api/v1/storage/raid"),
     ]);
     renderHelperBadge(status);
+    renderUsb(status, disks);
     renderDisks(disks);
     renderVolumes(volumes);
     renderRaid(raid.arrays);
@@ -340,3 +387,7 @@ async function refresh() {
 
 document.getElementById("mount-preview-btn")?.addEventListener("click", previewMount);
 refresh();
+// USB drives come and go: refresh while the page is visible and no dialog is open.
+window.setInterval(() => {
+  if (!document.hidden && !document.querySelector(".modal.show")) refresh();
+}, 10000);

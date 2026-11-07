@@ -50,7 +50,7 @@ from app.core.secrets import CredentialCipher
 from app.db.base import utcnow_naive
 from app.db.session import Database
 from app.models import BackupRun, MediaLibrary, MediaTranscode, SyncRun
-from app.services import audit, audit_chain, remote_sync
+from app.services import audit, audit_chain, remote_sync, removable
 from app.services.backup import jobs as backup_jobs
 from app.services.media import jobs as media_jobs
 from app.services.media import transcode
@@ -126,6 +126,7 @@ class Worker:
             self._monitor_tick(session, now)
             self._backup_tick(session, now)
             self._audit_tick(session)
+            removable.record_helper_events(session, self.settings)
             if time.monotonic() - self._last_prune >= _PRUNE_INTERVAL_SECONDS:
                 self._last_prune = time.monotonic()
                 pruned = remote_sync.prune_runs(session, self.settings)

@@ -175,6 +175,22 @@ The file manager operates only inside the configured managed roots (`NAS_FILE_RO
 
 Mutations and downloads are audited (`file.uploaded`, `file.downloaded`, `file.deleted`, `file.renamed`, `file.created_dir`).
 
+**USB drives and transfers (Phase 16).** Plugged-in USB drives (auto-mounted by the helper under `NAS_REMOVABLE_MOUNT_DIR`) are *locations* next to the NAS roots. The routes above accept a drive's folder as `root`. Which permission applies depends on the `root`: NAS roots need `files:read` / `files:write`, USB drives need `removable:read` / `removable:write` (admin and operator by default). Denials are 403 and audited as `auth.permission_denied`. A drive that was pulled out answers 404 "That USB drive is no longer connected". USB drives never appear in `/files/roots`, so they cannot become Samba shares, media libraries or backup targets, and changes on them are not added to the sync change journal.
+
+- `GET /files/locations` (`files:read` or `removable:read`) → `[{"root", "label", "kind": "nas"|"removable", "writable", "fstype", "device", "total_bytes", "free_bytes"}]`. NAS roots are listed with `files:read`, drives with `removable:read`. `writable` reflects both the caller's write permission and the drive (read-only mounts, Linux-formatted sticks the service user cannot write).
+- `POST /files/transfers` → 202 `Transfer`. Body: `{"sources": [{"root", "path"}] (1–1000), "dest_root", "dest_path": "", "mode": "copy"|"move", "conflict": "keep_both"|"skip"|"replace"}`. It needs read access to every source location (write access for a move) and write access to the destination. It is refused up front with 400 for a missing item, a folder into itself, a move into the folder the items are already in, or a whole root as a source, and with 409 when the destination lacks free space. The job runs in the background in the web process:
+  - files are written to a hidden `.<name>.nas-part-*` file, fsynced and renamed, and folders are merged;
+  - `keep_both` names copies `name (1).ext`, and copying into the same folder always makes a copy;
+  - symlinks are skipped and reported;
+  - a move renames within one file system, otherwise copies and deletes each source only after its copy succeeded;
+  - a USB destination is flushed through the helper at the end.
+
+  Per-file problems (a file over 4 GB on FAT32, a name the drive cannot store, permission denied) go into `errors`. A full drive or a pulled-out stick fails the transfer.
+- `Transfer`: `{"id", "user_id", "mode", "sources", "dest_root", "dest_path", "conflict", "state": "queued"|"running"|"done"|"failed"|"cancelled"|"interrupted", "total_bytes", "done_bytes", "total_files", "done_files", "skipped_files", "current_name", "message", "errors": [{"path", "message"}], "created_at", "started_at", "finished_at"}`. Transfers still unfinished when the server restarts become `interrupted`.
+- `GET /files/transfers?limit=20` → the caller's own transfers, newest first. `GET /files/transfers/{id}` and `POST /files/transfers/{id}/cancel` work on the caller's own transfers only; anyone else's are 404. A cancel stops at the next 0.5 s progress point and keeps the files already copied.
+
+Audited: `file_transfer.started`, `file_transfer.finished` (outcome, counts, bytes), `file_transfer.cancel_requested`. The worker records the helper's `disk.removable_mounted`, `disk.removable_unmounted` and `disk.removable_mount_failed` events.
+
 ## Samba (`samba:read` / `samba:write`)
 
 - `GET /samba/shares` → list of shares.
@@ -247,7 +263,7 @@ Discovery is **read-only** and goes through the privileged helper; every respons
 
 - `GET /disks/{name}` → the block device and its children (partition/md/…).
 - `GET /disks/{name}/smart` → SMART health summary: `health` (`passed`/`failed`), model/serial/firmware, temperature, capacity and up to 12 attributes. Devices without SMART return `available: false` with the smartctl exit code, not an error.
-- `GET /disks/status` → `{"enabled", "available", "socket", "error"}` (helper reachability probe; the UI shows an offline badge when it fails).
+- `GET /disks/status` → `{"enabled", "available", "socket", "error", "removable_automount", "removable_mount_dir"}` (helper reachability probe; the UI shows an offline badge when it fails; the last two come from the helper itself, Phase 16).
 - `GET /storage/volumes` → mounted volumes (`target`, `source`, `fs_type`, `options`, `used_bytes`, `avail_bytes`, `size_bytes`).
 - `GET /storage/raid` → `{"arrays": [{"name": "md0", "path": "/dev/md0", "level": "raid1", "state": "active", "size_bytes": ..., "active_disks": 2, "total_disks": 2, "sync_action": null, "degraded": false, "members": [{"device": "sdb1", "state": "active sync"}]}], "detail_scan": "..."}`.
 

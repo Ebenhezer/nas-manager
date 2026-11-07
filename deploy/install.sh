@@ -199,6 +199,10 @@ log "installing pinned dependencies"
 # the env file can hold secrets.
 install -d -o root -g "$SERVICE_USER" -m 0750 "$ETC_DIR"
 
+# USB drives are auto-mounted below this folder by the helper (Phase 16); the
+# service group may enter it to read and copy files.
+install -d -o root -g "$SERVICE_USER" -m 0750 /media/nas-manager
+
 # Create the env file from the template only on the first install; an
 # existing file holds your settings and is never overwritten.
 if [[ -e $ENV_FILE ]]; then

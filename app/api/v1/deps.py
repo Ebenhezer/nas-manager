@@ -177,6 +177,36 @@ def require_permission(permission: str) -> Callable[..., CurrentUser]:
     return guard
 
 
+def check_permission(request: Request, db: Session, current: CurrentUser, permission: str) -> None:
+    """Inline form of ``require_permission`` for checks that depend on the
+    request (e.g. which file location it names); denials are audited alike."""
+    if permission not in current.permissions:
+        _audit_denial(request, db, current, permission)
+        raise ForbiddenError(
+            f"Missing required permission: {permission}",
+            details={"permission": permission},
+        )
+
+
+def require_any_permission(*permissions: str) -> Callable[..., CurrentUser]:
+    """Allow the request when the caller holds at least one of ``permissions``."""
+
+    def guard(
+        request: Request,
+        current: CurrentUser = Depends(get_current_user),
+        db: Session = Depends(get_db),
+    ) -> CurrentUser:
+        if not any(permission in current.permissions for permission in permissions):
+            _audit_denial(request, db, current, permissions[0])
+            raise ForbiddenError(
+                f"Missing required permission: {' or '.join(permissions)}",
+                details={"permission": permissions[0], "any_of": list(permissions)},
+            )
+        return current
+
+    return guard
+
+
 def _path_template(request: Request) -> str:
     """``/api/v1/users/{user_id}`` for ``/api/v1/users/7``: the throttle and the
     audit details name the endpoint, not each object id."""
