@@ -49,6 +49,8 @@ import {
   libraryLabel,
   option,
   plural,
+  serverPath,
+  copyText,
   showError,
   thumbUrl,
   typeLabel,
@@ -199,6 +201,22 @@ function renderBreadcrumb() {
       crumb(part, { ...loc, folder: parts.slice(0, index + 1).join("/") }, index === parts.length - 1),
     );
   });
+  const here = currentFolderPath();
+  breadcrumb.title = here || "";
+  if (here) {
+    breadcrumb.append(
+      el(
+        "button",
+        {
+          className: "mx-crumb-copy",
+          title: `Copy path on server: ${here}`,
+          attrs: { type: "button", "aria-label": "Copy path on server" },
+          on: { click: () => copyText(here) },
+        },
+        icon("copy", { size: 14 }),
+      ),
+    );
+  }
   document.getElementById("mx-up").disabled = loc.type === "all";
 }
 
@@ -418,6 +436,17 @@ function locationLabel(lib, folder) {
   return `${lib ? libraryLabel(lib) : ""}${folder ? ` / ${folder}` : ""}`;
 }
 
+// "Copy path on server" for a path inside a library (administrators only).
+function copyPathEntry(lib, relPath) {
+  const path = serverPath(lib, relPath);
+  return path ? [{ label: "Copy path on server", icon: "copy", action: () => copyText(path) }] : [];
+}
+
+function currentFolderPath() {
+  const loc = state.location;
+  return loc.type === "library" ? serverPath(library(loc.libraryId), loc.folder) : null;
+}
+
 function itemElement(item, index) {
   const selected = state.selected.has(item.id);
   const common = {
@@ -449,7 +478,7 @@ function itemElement(item, index) {
       el("td", { className: "text-end", text: formatBytes(item.size) }),
       el("td", { className: "text-end", text: item.duration_seconds ? formatSeconds(item.duration_seconds) : "" }),
       el("td", { text: [item.camera_make, item.camera_model].filter(Boolean).join(" ") }),
-      el("td", { text: locationLabel(lib, folder) }),
+      el("td", { text: locationLabel(lib, folder), title: serverPath(lib, item.rel_path) || undefined }),
     );
     return row;
   }
@@ -754,7 +783,11 @@ function itemMenuEntries(items) {
     );
   }
   if (single) {
-    entries.push({ divider: true }, { label: "Properties", icon: "info", action: () => hooks.openViewer(state.items.indexOf(single), { info: true }) });
+    entries.push(
+      { divider: true },
+      ...copyPathEntry(library(single.library_id), single.rel_path),
+      { label: "Properties", icon: "info", action: () => hooks.openViewer(state.items.indexOf(single), { info: true }) },
+    );
   }
   return entries;
 }
@@ -770,7 +803,10 @@ function albumMenu(items) {
 
 function folderMenuEntries(folder) {
   const loc = state.location;
-  const entries = [{ label: "Open", icon: "folder", action: () => openFolder(folder) }];
+  const entries = [
+    { label: "Open", icon: "folder", action: () => openFolder(folder) },
+    ...copyPathEntry(library(loc.libraryId), folder.path),
+  ];
   if (locationIsWritable()) {
     entries.push(
       { label: "Rename", icon: "edit", action: () => renameFolder(loc.libraryId, folder) },
@@ -792,6 +828,8 @@ function backgroundMenuEntries() {
     );
   }
   if (state.items.length) entries.push({ label: "Select all", icon: "check", action: selectAll });
+  const here = currentFolderPath();
+  if (here) entries.push({ label: "Copy path on server", icon: "copy", action: () => copyText(here) });
   entries.push({ label: "Refresh", icon: "refresh", action: () => reload() });
   return entries;
 }

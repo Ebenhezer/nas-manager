@@ -44,6 +44,7 @@ const ICONS = {
   plus: "M12 5v14 M5 12h14",
   settings: "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z",
   menu: "M3 6h18 M3 12h18 M3 18h18",
+  copy: "M9 9h11v11H9z M5 15H4V4h11v1",
   location: "M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z M12 7.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z",
 };
 
@@ -153,6 +154,34 @@ export function showInfo(message) {
   infoBanner.classList.remove("d-none");
   window.clearTimeout(infoTimer);
   infoTimer = window.setTimeout(() => infoBanner.classList.add("d-none"), 6000);
+}
+
+// Absolute path on the server of ``relPath`` inside ``lib`` (administrators
+// get the library's ``disk_path``; everyone else gets null).
+export function serverPath(lib, relPath = "") {
+  if (!lib || !lib.disk_path) return null;
+  return relPath ? `${lib.disk_path.replace(/\/+$/, "")}/${relPath}` : lib.disk_path;
+}
+
+// Copy ``text``; the Clipboard API needs HTTPS or localhost, and a NAS is
+// often opened over plain HTTP on the LAN, so fall back to execCommand.
+export async function copyText(text, label = "Path") {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const area = el("textarea", { className: "mx-copy-buffer", attrs: { readonly: true, "aria-hidden": "true" } });
+      area.value = text;
+      document.body.append(area);
+      area.select();
+      const copied = document.execCommand("copy");
+      area.remove();
+      if (!copied) throw new Error("copy refused");
+    }
+    showInfo(`${label} copied: ${text}`);
+  } catch (_ignored) {
+    showError(`Could not copy automatically. ${label}: ${text}`);
+  }
 }
 
 export function storageGet(key, fallback) {

@@ -93,8 +93,23 @@ def actor_of(current: CurrentUser) -> MediaActor:
     return MediaActor(user=current.user, permissions=current.permissions)
 
 
+def _disk_path(settings: Settings, actor: MediaActor, library: MediaLibrary) -> str | None:
+    """The library's absolute folder on the server, for administrators only
+    (to find files over SSH); None when its root is no longer configured."""
+    if not actor.is_admin:
+        return None
+    try:
+        return str(libraries.library_path(settings, library))
+    except AppError:
+        return None
+
+
 def _library_out(
-    session: Session, actor: MediaActor, library: MediaLibrary, counts: LibraryCounts
+    session: Session,
+    settings: Settings,
+    actor: MediaActor,
+    library: MediaLibrary,
+    counts: LibraryCounts,
 ) -> LibraryOut:
     own = library.is_personal and library.owner_user_id == actor.user.id
     browsable = libraries.is_browsable(session, actor, library.id)
@@ -108,6 +123,7 @@ def _library_out(
         writable=own and actor.can_write,
         root=library.root,
         path=library.rel_path,
+        disk_path=_disk_path(settings, actor, library),
         enabled=library.enabled,
         include_videos=library.include_videos,
         group_ids=libraries.library_group_ids(session, library.id),
@@ -142,9 +158,11 @@ def _folder_out(row: folders.FolderInfo) -> FolderOut:
     )
 
 
-def _one_library_out(session: Session, actor: MediaActor, library: MediaLibrary) -> LibraryOut:
+def _one_library_out(
+    session: Session, settings: Settings, actor: MediaActor, library: MediaLibrary
+) -> LibraryOut:
     counts = libraries.counts_by_library(session, [library.id])[library.id]
-    return _library_out(session, actor, library, LibraryCounts(**counts))
+    return _library_out(session, settings, actor, library, LibraryCounts(**counts))
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +184,9 @@ def list_libraries(
         libraries.ensure_personal_library(db, settings, current.user)
     rows = libraries.visible_libraries(db, actor)
     counts = libraries.counts_by_library(db, [row.id for row in rows])
-    result = [_library_out(db, actor, row, LibraryCounts(**counts[row.id])) for row in rows]
+    result = [
+        _library_out(db, settings, actor, row, LibraryCounts(**counts[row.id])) for row in rows
+    ]
     result.sort(key=lambda lib: (not lib.is_own, lib.kind != "shared", lib.name.lower()))
     return result
 
@@ -190,12 +210,13 @@ def create_library(
         actor=current.user,
         context=request_audit_context(request),
     )
-    return _one_library_out(db, actor_of(current), library)
+    return _one_library_out(db, request.app.state.settings, actor_of(current), library)
 
 
 @router.get("/libraries/{library_id}", response_model=LibraryOut)
 def get_library(
     library_id: int,
+    request: Request,
     current: CurrentUser = Depends(require_permission("media:read")),
     db: Session = Depends(get_db),
 ) -> LibraryOut:
@@ -204,7 +225,7 @@ def get_library(
         library = libraries.get_library_for_admin(db, library_id)
     else:
         library = libraries.get_browsable_library(db, actor, library_id)
-    return _one_library_out(db, actor, library)
+    return _one_library_out(db, request.app.state.settings, actor, library)
 
 
 @router.patch("/libraries/{library_id}", response_model=LibraryOut)
@@ -224,7 +245,7 @@ def update_library(
         actor=current.user,
         context=request_audit_context(request),
     )
-    return _one_library_out(db, actor_of(current), library)
+    return _one_library_out(db, request.app.state.settings, actor_of(current), library)
 
 
 @router.delete("/libraries/{library_id}", status_code=204)
@@ -255,7 +276,7 @@ def set_library_groups(
     libraries.set_library_groups(
         db, library, payload.group_ids, actor=current.user, context=request_audit_context(request)
     )
-    return _one_library_out(db, actor_of(current), library)
+    return _one_library_out(db, request.app.state.settings, actor_of(current), library)
 
 
 @router.post("/libraries/{library_id}/scan", response_model=LibraryOut, status_code=202)
@@ -274,7 +295,7 @@ def scan_library(
     if not libraries.can_scan(library, actor):
         raise ForbiddenError("Only the owner or an administrator can rescan this library")
     libraries.queue_scan(db, library, actor=current.user, context=request_audit_context(request))
-    return _one_library_out(db, actor, library)
+    return _one_library_out(db, request.app.state.settings, actor, library)
 
 
 @router.get("/libraries/{library_id}/folders", response_model=FolderList)

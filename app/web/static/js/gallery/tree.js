@@ -6,7 +6,7 @@ import { apiFetch } from "../api.js";
 import { addToAlbum, createAlbum, createFolder, deleteAlbum, deleteFolder, moveItemsTo, renameAlbum, renameFolder } from "./actions.js";
 import { onLongPress, showMenu } from "./menu.js";
 import { hooks, page, state } from "./state.js";
-import { API, el, icon, libraryLabel, showError } from "./util.js";
+import { API, copyText, el, icon, libraryLabel, serverPath, showError } from "./util.js";
 
 const body = document.getElementById("mx-nav-body");
 
@@ -163,9 +163,17 @@ function caretFor(libraryId, path, hasChildren) {
   );
 }
 
+function copyPathEntry(lib, relPath) {
+  const path = serverPath(lib, relPath);
+  return path ? [{ label: "Copy path on server", icon: "copy", action: () => copyText(path) }] : [];
+}
+
 function folderMenu(lib, folder) {
   return (event) => {
-    const entries = [{ label: "Open", icon: "folder", action: () => go({ type: "library", libraryId: lib.id, folder: folder.path }) }];
+    const entries = [
+      { label: "Open", icon: "folder", action: () => go({ type: "library", libraryId: lib.id, folder: folder.path }) },
+      ...copyPathEntry(lib, folder.path),
+    ];
     if (lib.writable && page.canWrite) {
       entries.push(
         { label: "New folder", icon: "folderPlus", action: () => createFolder(lib.id, folder.path) },
@@ -224,7 +232,10 @@ export function renderTree() {
       caret: caretFor(lib.id, "", true),
       count: counts,
       onContext: (event) => {
-        const entries = [{ label: "Open", icon: "folder", action: () => go({ type: "library", libraryId: lib.id, folder: "" }) }];
+        const entries = [
+          { label: "Open", icon: "folder", action: () => go({ type: "library", libraryId: lib.id, folder: "" }) },
+          ...copyPathEntry(lib, ""),
+        ];
         if (lib.writable && page.canWrite) entries.push({ label: "New folder", icon: "folderPlus", action: () => createFolder(lib.id, "") });
         showMenu(event.clientX, event.clientY, entries);
       },

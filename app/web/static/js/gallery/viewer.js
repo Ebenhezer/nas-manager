@@ -8,7 +8,7 @@ import { addToAlbum, addToNewAlbum, deleteItems, downloadUrl, itemWritable, setF
 import { loadMore } from "./browser.js";
 import { showMenuAt } from "./menu.js";
 import { library, page, state } from "./state.js";
-import { API, el, formatDate, formatSeconds, icon, libraryLabel, showError, thumbUrl } from "./util.js";
+import { API, copyText, el, formatDate, formatSeconds, icon, libraryLabel, serverPath, showError, thumbUrl } from "./util.js";
 
 const box = document.getElementById("mx-lightbox");
 const stage = document.getElementById("mx-lb-stage");
@@ -74,6 +74,27 @@ function renderMeta(item) {
     if (item.bitrate) metaRow(list, "Bitrate", `${(item.bitrate / 1e6).toFixed(1)} Mbit/s`);
   }
   metaRow(list, "Type", item.mime);
+  const onDisk = serverPath(lib, item.rel_path);
+  if (onDisk) {
+    list.append(
+      el("dt", { className: "col-12 mx-lb-muted mt-2", text: "Path on server" }),
+      el(
+        "dd",
+        { className: "col-12 mx-path" },
+        el("code", { text: onDisk }),
+        el(
+          "button",
+          {
+            className: "btn btn-sm mx-lb-btn mx-path-copy",
+            title: "Copy path",
+            attrs: { type: "button", "aria-label": "Copy path on server" },
+            on: { click: () => copyText(onDisk) },
+          },
+          icon("copy", { size: 16 }),
+        ),
+      ),
+    );
+  }
 }
 
 function setInfo(open) {

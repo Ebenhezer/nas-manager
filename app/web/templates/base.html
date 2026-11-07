@@ -55,6 +55,26 @@
           </svg>
           <span>Dashboard</span>
         </a>
+        {% if can('media:read') %}
+        <div class="app-nav-section" role="group" aria-labelledby="nav-sec-media">
+          <div class="app-nav-label" id="nav-sec-media">Media</div>
+          <a class="app-nav-link{% if request.url.path == '/gallery' %} active{% endif %}" href="/gallery"{% if request.url.path == '/gallery' %} aria-current="page"{% endif %}>
+            <svg class="app-nav-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="16" rx="2"/>
+              <circle cx="9" cy="10" r="2"/>
+              <path d="m21 16-5-5-9 9"/>
+            </svg>
+            <span>Gallery</span>
+          </a>
+          <a class="app-nav-link{% if request.url.path == '/videos' %} active{% endif %}" href="/videos"{% if request.url.path == '/videos' %} aria-current="page"{% endif %}>
+            <svg class="app-nav-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="2" y="5" width="14" height="14" rx="2"/>
+              <path d="m16 10 6-3v10l-6-3z"/>
+            </svg>
+            <span>Videos</span>
+          </a>
+        </div>
+        {% endif %}
         {% if can('disks:read') or can('files:read') or can('samba:read') or can('uploads:read') %}
         <div class="app-nav-section" role="group" aria-labelledby="nav-sec-storage">
           <div class="app-nav-label" id="nav-sec-storage">Storage</div>
@@ -98,26 +118,7 @@
           {% endif %}
         </div>
         {% endif %}
-        {% if can('media:read') %}
-        <div class="app-nav-section" role="group" aria-labelledby="nav-sec-media">
-          <div class="app-nav-label" id="nav-sec-media">Media</div>
-          <a class="app-nav-link{% if request.url.path == '/gallery' %} active{% endif %}" href="/gallery"{% if request.url.path == '/gallery' %} aria-current="page"{% endif %}>
-            <svg class="app-nav-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <rect x="3" y="4" width="18" height="16" rx="2"/>
-              <circle cx="9" cy="10" r="2"/>
-              <path d="m21 16-5-5-9 9"/>
-            </svg>
-            <span>Gallery</span>
-          </a>
-          <a class="app-nav-link{% if request.url.path == '/videos' %} active{% endif %}" href="/videos"{% if request.url.path == '/videos' %} aria-current="page"{% endif %}>
-            <svg class="app-nav-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <rect x="2" y="5" width="14" height="14" rx="2"/>
-              <path d="m16 10 6-3v10l-6-3z"/>
-            </svg>
-            <span>Videos</span>
-          </a>
-        </div>
-        {% endif %}
+        
         {% if can('backup:read') or can('remotes:read') %}
         <div class="app-nav-section" role="group" aria-labelledby="nav-sec-backup">
           <div class="app-nav-label" id="nav-sec-backup">Backup &amp; sync</div>

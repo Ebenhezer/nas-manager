@@ -46,6 +46,8 @@ class LibraryOut(BaseModel):
     writable: bool
     root: str
     path: str
+    # Absolute folder on the server (administrators only; None otherwise).
+    disk_path: str | None = None
     enabled: bool
     include_videos: bool
     group_ids: list[int]

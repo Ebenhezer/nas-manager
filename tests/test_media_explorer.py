@@ -351,3 +351,31 @@ def test_zip_download(app: FastAPI, admin_client: TestClient) -> None:
     big = upload(admin_client, "big.jpg", os.urandom(1024 * 1024 + 1))
     too_big = admin_client.get(f"{API}/items/zip", params={"ids": big["id"]})
     assert too_big.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Server paths (for finding files over SSH)
+# ---------------------------------------------------------------------------
+
+
+def test_disk_path_is_shown_to_administrators_only(app: FastAPI, admin: User) -> None:
+    settings = app.state.settings
+    shared = settings.resolved_file_roots[0] / "Photos"
+    shared.mkdir(parents=True)
+    create_user(app, admin, "alice")
+    with user_client(app, "admin") as admin_client:
+        item = upload(admin_client, "beach.jpg", jpeg_bytes(), path="Trips")
+        created = admin_client.post(
+            f"{API}/libraries",
+            json={"name": "Family", "root": str(settings.resolved_file_roots[0]), "path": "Photos"},
+        )
+        assert created.status_code == 201, created.text
+        assert created.json()["disk_path"] == str(shared.resolve())
+        libs = {lib["id"]: lib for lib in admin_client.get(f"{API}/libraries").json()}
+        own = libs[item["library_id"]]
+        assert own["disk_path"] == str((settings.resolved_media_dir / "admin").resolve())
+        assert os.path.isfile(f"{own['disk_path']}/{item['rel_path']}")
+        one = admin_client.get(f"{API}/libraries/{item['library_id']}").json()
+        assert one["disk_path"] == own["disk_path"]
+    with user_client(app, "alice") as alice:
+        assert all(lib["disk_path"] is None for lib in alice.get(f"{API}/libraries").json())

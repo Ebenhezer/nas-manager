@@ -24,7 +24,7 @@ export function renderLibraryTable() {
   const body = document.getElementById("libraries-body");
   body.replaceChildren();
   for (const library of state.libraries) {
-    const folder = library.kind === "shared" ? `${library.root}/${library.path}` : library.path;
+    const folder = library.disk_path || (library.kind === "shared" ? `${library.root}/${library.path}` : library.path);
     const counts = `${library.counts.image} photos · ${library.counts.video} videos`;
     let scan = library.scan_state === "idle" ? formatDate(library.last_scan_at) : library.scan_state;
     if (library.last_scan_status === "failed") scan += ` (failed: ${library.last_scan_error})`;
