@@ -94,29 +94,83 @@ def is_removable_disk(disk: dict[str, Any]) -> bool:
     return disk.get("tran") == "usb" or _truthy(disk.get("rm")) or _truthy(disk.get("hotplug"))
 
 
-def fstab_specs(path: Path = FSTAB) -> set[str]:
-    """Devices named in fstab (``/dev/...``, ``UUID=``, ``LABEL=``, ...)."""
-    specs: set[str] = set()
+@dataclass(frozen=True)
+class FstabEntry:
+    spec: str
+    target: str = ""
+    fstype: str = ""
+    line_no: int = 0
+
+
+def fstab_entries(path: Path = FSTAB) -> list[FstabEntry]:
+    """The non-comment lines of fstab."""
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return specs
-    for line in text.splitlines():
+        return []
+    entries: list[FstabEntry] = []
+    for number, line in enumerate(text.splitlines(), start=1):
         fields = line.split("#", 1)[0].split()
         if fields:
-            specs.add(fields[0])
-    return specs
+            entries.append(
+                FstabEntry(
+                    spec=fields[0],
+                    target=fields[1] if len(fields) > 1 else "",
+                    fstype=fields[2] if len(fields) > 2 else "",
+                    line_no=number,
+                )
+            )
+    return entries
 
 
-def _in_fstab(node: dict[str, Any], specs: set[str]) -> bool:
-    keys = {node.get("path"), f"/dev/{node.get('name')}"}
-    if node.get("uuid"):
-        keys.add(f"UUID={node['uuid']}")
-    if node.get("label"):
-        keys.add(f"LABEL={node['label']}")
-    if node.get("partuuid"):
-        keys.add(f"PARTUUID={node['partuuid']}")
-    return bool(keys & specs)
+def fstab_specs(path: Path = FSTAB) -> set[str]:
+    """Devices named in fstab (``/dev/...``, ``UUID=``, ``LABEL=``, ...)."""
+    return {entry.spec for entry in fstab_entries(path)}
+
+
+FstabArg = set[str] | list[FstabEntry]
+
+
+def _as_entries(fstab: FstabArg) -> list[FstabEntry]:
+    if isinstance(fstab, set):
+        return [FstabEntry(spec=spec) for spec in sorted(fstab)]
+    return fstab
+
+
+def fstab_match(
+    node: dict[str, Any], fstab: FstabArg, mounts: list[MountEntry] | None = None
+) -> FstabEntry | None:
+    """The fstab line that really means this device, if any.
+
+    Stable identifiers (UUID, LABEL, PARTUUID, ...) always count. Kernel names
+    such as ``/dev/sda`` are handed out in detection order, so a plugged-in
+    stick can get the name an fstab line uses for another disk; such a line
+    only counts when it is not the root or swap and its mount point is not
+    already in use by a different device.
+    """
+    name = node.get("name")
+    stable: set[str] = set()
+    for key, prefix, directory in (
+        ("uuid", "UUID=", "by-uuid"),
+        ("label", "LABEL=", "by-label"),
+        ("partuuid", "PARTUUID=", "by-partuuid"),
+        ("partlabel", "PARTLABEL=", "by-partlabel"),
+    ):
+        if node.get(key):
+            stable.update({f"{prefix}{node[key]}", f"/dev/disk/{directory}/{node[key]}"})
+    kernel = {f"/dev/{name}", node.get("path")}
+    for entry in _as_entries(fstab):
+        if entry.spec in stable:
+            return entry
+        if entry.spec not in kernel:
+            continue
+        if entry.fstype == "swap" or entry.target in {"/", "none", "swap"}:
+            continue
+        sources = {m.source for m in mounts or [] if m.target == entry.target}
+        if sources and f"/dev/{name}" not in sources:
+            continue  # that mount point belongs to another disk
+        return entry
+    return None
 
 
 @dataclass
@@ -176,8 +230,9 @@ def probe_filesystem(device: str) -> dict[str, str]:
 def inspect(
     lsblk_json: str,
     *,
-    fstab: set[str],
+    fstab: FstabArg,
     probe: Callable[[str], dict[str, str]] | None = None,
+    mounts: list[MountEntry] | None = None,
 ) -> list[DeviceStatus]:
     """Every partition of every removable disk, with what to do about it."""
     probe = probe or probe_filesystem
@@ -224,9 +279,13 @@ def inspect(
                 status.state, status.reason = "ignored", _IGNORED_FSTYPES[fstype]
             elif fstype not in SUPPORTED_FSTYPES:
                 status.state, status.reason = "unsupported", f"unsupported file system: {fstype}"
-            elif _in_fstab(probed, fstab):
+            elif (entry := fstab_match(probed, fstab, mounts)) is not None:
+                where = f", line {entry.line_no}" if entry.line_no else ""
                 status.state = "ignored"
-                status.reason = "listed in /etc/fstab (the system mounts it, not the NAS)"
+                status.reason = (
+                    f"listed in /etc/fstab{where}: {entry.spec} {entry.target}".rstrip()
+                    + " (the system mounts it, not the NAS)"
+                )
             found.append(status)
     return found
 
@@ -234,13 +293,14 @@ def inspect(
 def candidates(
     lsblk_json: str,
     *,
-    fstab: set[str],
+    fstab: FstabArg,
     probe: Callable[[str], dict[str, str]] | None = None,
+    mounts: list[MountEntry] | None = None,
 ) -> list[Candidate]:
     """Unmounted partitions of removable disks that may be auto-mounted."""
     return [
         status.candidate()
-        for status in inspect(lsblk_json, fstab=fstab, probe=probe)
+        for status in inspect(lsblk_json, fstab=fstab, probe=probe, mounts=mounts)
         if status.state == "pending"
     ]
 
@@ -468,7 +528,7 @@ def reconcile(
     _unmount_stale(base, read_mounts(mounts_path), sink)
     gid = service_gid(settings)
     stdout = _run_checked(["lsblk", "-J", "-b", "-o", LSBLK_COLUMNS])
-    statuses = inspect(stdout, fstab=fstab_specs(fstab))
+    statuses = inspect(stdout, fstab=fstab_entries(fstab), mounts=read_mounts(mounts_path))
     for status in statuses:
         if status.state == "pending":
             _mount_one(base, status, gid, sink)

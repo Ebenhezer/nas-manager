@@ -167,7 +167,7 @@ With the helper installed, plugging in a USB stick or disk is enough. Within a f
 - **If a stick does not mount**, the Disks page's USB card shows each partition with a state (ready, could not mount, not supported, left alone) and the reason. An admin can press **Try again** after fixing it, without waiting for the one-minute retry. Common reasons and fixes:
   - *"no exFAT driver"* (or NTFS): install the driver from the table above, then press Try again.
   - *"file system not recognised"*: the stick is empty or unformatted, or uses a format not listed above.
-  - *"listed in /etc/fstab"*: the system mounts it itself; remove the fstab line to let the NAS manage it.
+  - *"listed in /etc/fstab, line N: …"*: that fstab line mounts this drive, so the system manages it. Remove or change the named line to let the NAS manage it. Only lines that really mean the stick count: `UUID=`/`LABEL=`/`PARTUUID=` entries, and kernel names (`/dev/sdb1`) whose mount point is not already used by another disk. Names like `/dev/sda` are handed out in plug-in order, so a line for your system disk (`/dev/sda /`) never blocks a stick that happens to get `sda`. Use `UUID=` in fstab for disks you want the system to mount.
   - *"helper too old"* badge: after upgrading, re-run `sudo deploy/install.sh` and `sudo systemctl restart nas-manager-helper nas-manager nas-manager-worker`.
 - Check it by hand: `lsblk -f /dev/sdX`, `sudo blkid -p /dev/sdX1`, `grep -E 'exfat|ntfs' /proc/filesystems`, `journalctl -u nas-manager-helper | grep -i removable`, and the audit log (`disk.removable_mounted` / `disk.removable_unmounted` / `disk.removable_mount_failed`).
 

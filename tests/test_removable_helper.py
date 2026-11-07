@@ -418,3 +418,53 @@ def test_failed_mount_reason_is_kept_and_retry_bypasses_the_backoff(
     assert [e["action"] for e in result["events"]] == ["mounted"]
     assert result["devices"][0]["state"] == "mounted"
     assert result["devices"][0]["mountpoint"] == str(settings.removable_mount_dir / "UDISK")
+
+
+# ---------------------------------------------------------------------------
+# fstab: stable identifiers count, kernel names only when they really mean us
+# ---------------------------------------------------------------------------
+
+
+def _fstab(tmp_path: Path, text: str) -> list[removable.FstabEntry]:
+    path = tmp_path / "fstab"
+    path.write_text(text)
+    return removable.fstab_entries(path)
+
+
+def test_kernel_name_of_another_disk_does_not_block_a_stick(tmp_path: Path) -> None:
+    """The user's case: fstab mounts '/dev/sda' as / but the stick got sda."""
+    fstab = _fstab(
+        tmp_path, "# comment\n/dev/sda / ext4 defaults 0 1\n/dev/sda2 none swap sw 0 0\n"
+    )
+    mounts = parse_mounts("/dev/nvme0n1p2 / ext4 rw 0 0\n")
+    listing = lsblk(disk("sda", fstype="exfat", label="UDISK", uuid="1234-ABCD"))
+    [status] = removable.inspect(listing, fstab=fstab, mounts=mounts, probe=lambda d: {})
+    assert status.state == "pending"
+
+
+def test_stable_identifiers_in_fstab_are_respected_and_named(tmp_path: Path) -> None:
+    fstab = _fstab(tmp_path, "\n\nUUID=1234-ABCD /mnt/x exfat noauto 0 0\n")
+    listing = lsblk(disk("sdc", children=[part("sdc1", "exfat", uuid="1234-ABCD")]))
+    [status] = removable.inspect(listing, fstab=fstab, mounts=[], probe=lambda d: {})
+    assert status.state == "ignored"
+    assert status.reason == (
+        "listed in /etc/fstab, line 3: UUID=1234-ABCD /mnt/x (the system mounts it, not the NAS)"
+    )
+    by_label = _fstab(tmp_path, "/dev/disk/by-label/STICK /mnt/s vfat noauto 0 0\n")
+    listing = lsblk(disk("sdc", children=[part("sdc1", "vfat", label="STICK")]))
+    assert (
+        removable.inspect(listing, fstab=by_label, mounts=[], probe=lambda d: {})[0].state
+        == "ignored"
+    )
+
+
+def test_kernel_name_line_for_an_unused_mount_point_is_still_respected(tmp_path: Path) -> None:
+    fstab = _fstab(tmp_path, "/dev/sdb1 /mnt/usb vfat noauto 0 0\n")
+    listing = lsblk(disk("sdb", children=[part("sdb1", "vfat")]))
+    [status] = removable.inspect(listing, fstab=fstab, mounts=[], probe=lambda d: {})
+    assert status.state == "ignored" and "line 1: /dev/sdb1 /mnt/usb" in status.reason
+    busy = parse_mounts("/dev/sdz9 /mnt/usb ext4 rw 0 0\n")
+    assert (
+        removable.inspect(listing, fstab=fstab, mounts=busy, probe=lambda d: {})[0].state
+        == "pending"
+    )
